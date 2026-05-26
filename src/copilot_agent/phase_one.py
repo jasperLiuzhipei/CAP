@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import json
 import difflib
+import json
+import shutil
+import subprocess
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from .memory import append_run_memory, load_memory_text, resolve_memory_path
 from .model_config import DEFAULT_OPENAI_MODEL, ResolvedModelConfig, resolve_model_config
 
 DEFAULT_MODEL = DEFAULT_OPENAI_MODEL
@@ -16,6 +20,7 @@ SNAPSHOT_SKIP_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".copilot",
     ".venv",
     "__pycache__",
     "node_modules",
@@ -34,9 +39,12 @@ class PhaseOneConfig:
         default_factory=lambda: resolve_model_config(require_api_key=False)
     )
     test_cmd: str | None = None
-    max_turns: int = 16
+    max_turns: int = 32
     output_dir: Path = Path("runs")
     save: bool = True
+    memory_enabled: bool = False
+    memory_path: Path | None = None
+    host_verify: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,15 +69,19 @@ class PhaseOneReport:
     model: str
     model_provider: str
     model_transport: str
+    tool_strategy: str
     model_base_url: str | None
     prompt: str
     final_output: str
+    memory_enabled: bool = False
+    memory_path: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     git_baseline_created: bool = False
     git_baseline_log: str = ""
     git_status: str = ""
     diff: str = ""
     verification: CommandResult | None = None
+    host_verification: CommandResult | None = None
     saved_dir: str | None = None
 
 
@@ -93,32 +105,70 @@ def build_phase_one_prompt(config: PhaseOneConfig) -> str:
     verification = (
         f"Run this exact verification command from `repo/`: `{config.test_cmd}`."
         if config.test_cmd
-        else "Infer and run the most relevant lightweight verification command if the repo provides one."
+        else (
+            "Infer and run the most relevant lightweight verification command "
+            "if the repo provides one."
+        )
     )
-    edit_instruction = (
-        "Use the available shell tool to inspect and edit files. Do not call apply_patch; "
-        "this provider route exposes shell tools only."
+    if config.model_config.tool_strategy == "native":
+        edit_instruction = (
+            "When using apply_patch, paths are relative to the sandbox workspace root, "
+            "so edit `repo/...` paths."
+        )
+    elif config.model_config.tool_strategy == "compat_functions":
+        edit_instruction = (
+            "Use the available `apply_patch` function tool for file edits when possible. "
+            "Pass a JSON argument with a `patch` string that starts with `*** Begin Patch`; "
+            "paths are relative to the sandbox workspace root, so edit `repo/...` paths. "
+            "Use shell for inspection and verification."
+        )
+    else:
+        edit_instruction = (
+            "Use the available shell tool to inspect and edit files. Do not call apply_patch; "
+            "this provider route exposes shell tools only."
+        )
+    loop_instruction = (
+        "For Chat Completions compatibility, keep the loop short: inspect only the relevant "
+        "files, apply the minimal patch, run verification once, then produce the final answer."
         if config.model_config.transport == "chat_completions"
-        else "When using apply_patch, paths are relative to the sandbox workspace root, so edit `repo/...` paths."
+        else "Use the SDK-native sandbox tools directly and stop after verification is complete."
     )
 
-    return "\n".join(
-        [
-            "You are the phase-one Copilot coding agent.",
-            "",
-            "Workspace contract:",
-            "- The target repository is mounted at `repo/` inside the sandbox workspace.",
-            "- Inspect the repository before editing.",
-            "- Make the smallest correct change that satisfies the task.",
-            f"- {edit_instruction}",
-            "- Preserve existing behavior unless the user explicitly asks for a broader change.",
-            f"- {verification}",
-            "- In your final answer, summarize changed files, verification results, and remaining risks.",
-            "",
-            "User task:",
-            config.task.strip(),
-        ]
-    )
+    prompt_parts = [
+        "You are the phase-one Copilot coding agent.",
+        "",
+        "Workspace contract:",
+        "- The target repository is mounted at `repo/` inside the sandbox workspace.",
+        "- Inspect the repository before editing.",
+        "- Make the smallest correct change that satisfies the task.",
+        f"- {edit_instruction}",
+        f"- {loop_instruction}",
+        "- Preserve existing behavior unless the user explicitly asks for a broader change.",
+        f"- {verification}",
+        (
+            "- In your final answer, summarize changed files, verification results, "
+            "and remaining risks."
+        ),
+    ]
+
+    if config.memory_enabled:
+        memory_text = load_memory_text(config.repo, config.memory_path)
+        if memory_text:
+            prompt_parts.extend(
+                [
+                    "",
+                    "Project memory:",
+                    memory_text,
+                    "",
+                    (
+                        "Use project memory as background context, but prefer current "
+                        "repository files when they disagree."
+                    ),
+                ]
+            )
+
+    prompt_parts.extend(["", "User task:", config.task.strip()])
+    return "\n".join(prompt_parts)
 
 
 def _dependency_help(missing_name: str) -> str:
@@ -135,12 +185,13 @@ def _dependency_help(missing_name: str) -> str:
     )
 
 
-def _load_agents_sdk() -> dict[str, Any]:
+def _load_agents_sdk() -> dict[str, Any]:  # pragma: no cover
     """Import OpenAI Agents SDK lazily so dry-run and tests do not require API deps."""
 
     try:
         from agents import (
             AsyncOpenAI,
+            FunctionTool,
             ModelSettings,
             OpenAIChatCompletionsModel,
             Runner,
@@ -149,7 +200,9 @@ def _load_agents_sdk() -> dict[str, Any]:
         from agents.run import RunConfig
         from agents.sandbox import Manifest, SandboxAgent, SandboxRunConfig
         from agents.sandbox.capabilities.capabilities import Capabilities
+        from agents.sandbox.capabilities.capability import Capability
         from agents.sandbox.capabilities.shell import Shell
+        from agents.sandbox.capabilities.tools.apply_patch_tool import SandboxApplyPatchTool
         from agents.sandbox.entries import LocalDir
         from agents.sandbox.sandboxes.unix_local import UnixLocalSandboxClient
     except ModuleNotFoundError as exc:
@@ -157,7 +210,9 @@ def _load_agents_sdk() -> dict[str, Any]:
 
     return {
         "AsyncOpenAI": AsyncOpenAI,
+        "Capability": Capability,
         "Capabilities": Capabilities,
+        "FunctionTool": FunctionTool,
         "LocalDir": LocalDir,
         "Manifest": Manifest,
         "ModelSettings": ModelSettings,
@@ -165,6 +220,7 @@ def _load_agents_sdk() -> dict[str, Any]:
         "RunConfig": RunConfig,
         "Runner": Runner,
         "SandboxAgent": SandboxAgent,
+        "SandboxApplyPatchTool": SandboxApplyPatchTool,
         "SandboxRunConfig": SandboxRunConfig,
         "Shell": Shell,
         "UnixLocalSandboxClient": UnixLocalSandboxClient,
@@ -172,7 +228,7 @@ def _load_agents_sdk() -> dict[str, Any]:
     }
 
 
-def _build_agent_model(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:
+def _build_agent_model(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:  # pragma: no cover
     """Return the SDK-native model object for the resolved provider route."""
 
     model_config = config.model_config
@@ -192,7 +248,74 @@ def _build_agent_model(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:
     )
 
 
-def _build_agent(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:
+def _build_chat_completions_filesystem_capability(sdk: dict[str, Any]) -> Any:  # pragma: no cover
+    """Expose an apply_patch-like function tool for Chat Completions providers."""
+
+    class ChatCompletionsFilesystem(sdk["Capability"]):  # type: ignore[misc, valid-type]
+        type: Literal["chat_completions_filesystem"] = "chat_completions_filesystem"
+
+        def tools(self) -> list[Any]:
+            if self.session is None:
+                raise ValueError("ChatCompletionsFilesystem capability is not bound to a session.")
+
+            patch_tool = sdk["SandboxApplyPatchTool"](session=self.session, user=self.run_as)
+
+            async def invoke_apply_patch(ctx: Any, raw_input: str) -> str:
+                try:
+                    payload = json.loads(raw_input)
+                except json.JSONDecodeError as exc:
+                    return f"apply_patch failed: expected JSON arguments. {exc}"
+
+                patch = payload.get("patch")
+                if not isinstance(patch, str) or not patch.strip():
+                    return "apply_patch failed: argument `patch` must be a non-empty string."
+
+                try:
+                    return await patch_tool._on_invoke_tool(ctx, patch)
+                except Exception as exc:  # Let the model recover from malformed patches.
+                    return f"apply_patch failed: {exc}"
+
+            return [
+                sdk["FunctionTool"](
+                    name="apply_patch",
+                    description=(
+                        "Apply a patch inside the sandbox workspace. The single `patch` "
+                        "argument must use the same workspace-root-relative patch envelope as "
+                        "OpenAI native apply_patch: begin with `*** Begin Patch`, include one "
+                        "or more file operations, and end with `*** End Patch`."
+                    ),
+                    params_json_schema={
+                        "type": "object",
+                        "properties": {
+                            "patch": {
+                                "type": "string",
+                                "description": (
+                                    "Patch text using the OpenAI apply_patch envelope. "
+                                    "Paths must be relative to the sandbox workspace root, "
+                                    "for example repo/src/app.py."
+                                ),
+                            }
+                        },
+                        "required": ["patch"],
+                        "additionalProperties": False,
+                    },
+                    on_invoke_tool=invoke_apply_patch,
+                    strict_json_schema=False,
+                )
+            ]
+
+        async def instructions(self, manifest: Any) -> str | None:
+            _ = manifest
+            return (
+                "When editing files, prefer the `apply_patch` function tool. Its JSON arguments "
+                "must contain one field named `patch`, whose value is the normal apply_patch "
+                "text envelope. Patch paths are relative to the sandbox workspace root."
+            )
+
+    return ChatCompletionsFilesystem()
+
+
+def _build_agent(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:  # pragma: no cover
     manifest = sdk["Manifest"](
         entries={
             "repo": sdk["LocalDir"](src=config.repo),
@@ -203,6 +326,8 @@ def _build_agent(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:
         capabilities = [
             sdk["Shell"](),
         ]
+        if config.model_config.tool_strategy == "compat_functions":
+            capabilities.append(_build_chat_completions_filesystem_capability(sdk))
     else:
         capabilities = sdk["Capabilities"].default()
 
@@ -222,7 +347,7 @@ def _build_agent(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:
     )
 
 
-async def _exec_text(sandbox: Any, command: str) -> CommandResult:
+async def _exec_text(sandbox: Any, command: str) -> CommandResult:  # pragma: no cover
     result = await sandbox.exec(command, shell=True)
     stdout = result.stdout.decode("utf-8", errors="replace")
     stderr = result.stderr.decode("utf-8", errors="replace")
@@ -234,7 +359,7 @@ async def _exec_text(sandbox: Any, command: str) -> CommandResult:
     )
 
 
-async def _ensure_git_baseline(sandbox: Any) -> tuple[bool, str]:
+async def _ensure_git_baseline(sandbox: Any) -> tuple[bool, str]:  # pragma: no cover
     """Ensure `repo/` can produce a diff even when the source folder is not a git repo."""
 
     check = await _exec_text(sandbox, "git -C repo rev-parse --is-inside-work-tree")
@@ -281,7 +406,7 @@ def _snapshot_local_tree(root: Path) -> FileSnapshot:
     return FileSnapshot(files=files)
 
 
-async def _read_sandbox_text(sandbox: Any, path: Path) -> str | None:
+async def _read_sandbox_text(sandbox: Any, path: Path) -> str | None:  # pragma: no cover
     try:
         stream = await sandbox.read(path)
     except FileNotFoundError:
@@ -298,11 +423,14 @@ async def _read_sandbox_text(sandbox: Any, path: Path) -> str | None:
         return None
 
 
-async def _snapshot_sandbox_tree(sandbox: Any, root: str = "repo") -> FileSnapshot:
+async def _snapshot_sandbox_tree(
+    sandbox: Any, root: str = "repo"
+) -> FileSnapshot:  # pragma: no cover
     find = await _exec_text(
         sandbox,
         f"find {root} -type f "
         "! -path '*/.git/*' "
+        "! -path '*/.copilot/*' "
         "! -path '*/.venv/*' "
         "! -path '*/__pycache__/*' "
         "! -path '*/node_modules/*' "
@@ -341,16 +469,27 @@ def _diff_snapshots(before: FileSnapshot, after: FileSnapshot) -> tuple[str, str
         changed_paths.append(rel)
         before_lines = [] if before_text is None else before_text.splitlines(keepends=True)
         after_lines = [] if after_text is None else after_text.splitlines(keepends=True)
+        fromfile = "/dev/null" if before_text is None else f"repo/{rel}"
+        tofile = "/dev/null" if after_text is None else f"repo/{rel}"
         diff_chunks.extend(
             difflib.unified_diff(
                 before_lines,
                 after_lines,
-                fromfile=f"repo/{rel}",
-                tofile=f"repo/{rel}",
+                fromfile=fromfile,
+                tofile=tofile,
             )
         )
 
-    status = "\n".join(f"M {path}" for path in changed_paths)
+    status_lines: list[str] = []
+    for path in changed_paths:
+        if path not in before.files:
+            prefix = "A"
+        elif path not in after.files:
+            prefix = "D"
+        else:
+            prefix = "M"
+        status_lines.append(f"{prefix} {path}")
+    status = "\n".join(status_lines)
     return status, "".join(diff_chunks)
 
 
@@ -400,6 +539,8 @@ def _report_to_json(report: PhaseOneReport) -> dict[str, Any]:
     payload = asdict(report)
     if report.verification is not None:
         payload["verification"] = asdict(report.verification)
+    if report.host_verification is not None:
+        payload["host_verification"] = asdict(report.host_verification)
     return payload
 
 
@@ -420,11 +561,95 @@ def save_report(report: PhaseOneReport, output_dir: Path) -> Path:
             report.verification.combined_output,
             encoding="utf-8",
         )
+    if report.host_verification is not None:
+        (run_dir / "host_verification.log").write_text(
+            report.host_verification.combined_output,
+            encoding="utf-8",
+        )
 
     return run_dir
 
 
-async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:
+def _copy_repo_for_host_verification(repo: Path, destination: Path) -> None:
+    def ignore(_: str, names: list[str]) -> set[str]:
+        return {name for name in names if name in SNAPSHOT_SKIP_DIRS}
+
+    shutil.copytree(repo, destination, ignore=ignore)
+
+
+def _run_host_command(command: str, cwd: Path) -> CommandResult:
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        shell=True,
+        text=True,
+        capture_output=True,
+    )
+    return CommandResult(
+        command=command,
+        exit_code=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+def _run_host_verification(repo: Path, diff_text: str, test_cmd: str) -> CommandResult:
+    if not diff_text.strip():
+        return CommandResult(
+            command=test_cmd,
+            exit_code=0,
+            stdout="Host verification skipped because the sandbox diff is empty.\n",
+            stderr="",
+        )
+
+    with tempfile.TemporaryDirectory(prefix="copilot-host-verify-") as tmp:
+        tmp_root = Path(tmp)
+        repo_copy = tmp_root / "repo"
+        diff_path = tmp_root / "diff.patch"
+        _copy_repo_for_host_verification(repo, repo_copy)
+        diff_path.write_text(diff_text, encoding="utf-8")
+
+        check = subprocess.run(
+            ["git", "-C", str(repo_copy), "apply", "-p1", "--check", str(diff_path)],
+            text=True,
+            capture_output=True,
+        )
+        if check.returncode != 0:
+            return CommandResult(
+                command=f"git apply --check {diff_path}",
+                exit_code=check.returncode,
+                stdout=check.stdout,
+                stderr=check.stderr,
+            )
+
+        apply = subprocess.run(
+            ["git", "-C", str(repo_copy), "apply", "-p1", str(diff_path)],
+            text=True,
+            capture_output=True,
+        )
+        if apply.returncode != 0:
+            return CommandResult(
+                command=f"git apply {diff_path}",
+                exit_code=apply.returncode,
+                stdout=apply.stdout,
+                stderr=apply.stderr,
+            )
+
+        result = _run_host_command(test_cmd, repo_copy)
+        result_stdout = (
+            "Host verification ran in an isolated temporary copy of the repository.\n"
+            f"Temporary repo: {repo_copy}\n"
+            f"{result.stdout}"
+        )
+        return CommandResult(
+            command=test_cmd,
+            exit_code=result.exit_code,
+            stdout=result_stdout,
+            stderr=result.stderr,
+        )
+
+
+async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no cover
     validate_config(config)
 
     sdk = _load_agents_sdk()
@@ -470,6 +695,14 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:
             if config.test_cmd:
                 verification = await _exec_text(sandbox, f"cd repo && {config.test_cmd}")
 
+            host_verification = None
+            if config.test_cmd and config.host_verify:
+                host_verification = _run_host_verification(
+                    config.repo,
+                    diff_text,
+                    config.test_cmd,
+                )
+
             report = PhaseOneReport(
                 run_id=run_id,
                 repo=str(config.repo),
@@ -477,20 +710,30 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:
                 model=config.model_config.model,
                 model_provider=config.model_config.provider,
                 model_transport=config.model_config.transport,
+                tool_strategy=config.model_config.tool_strategy,
                 model_base_url=config.model_config.base_url,
                 prompt=prompt,
                 final_output=str(result.final_output),
+                memory_enabled=config.memory_enabled,
+                memory_path=(
+                    str(resolve_memory_path(config.repo, config.memory_path))
+                    if config.memory_enabled
+                    else None
+                ),
                 tool_calls=_extract_tool_calls(list(result.new_items)),
                 git_baseline_created=baseline_created,
                 git_baseline_log=baseline_log,
                 git_status=git_status_text,
                 diff=diff_text,
                 verification=verification,
+                host_verification=host_verification,
             )
     finally:
         await client.delete(sandbox)
 
     if config.save:
         save_report(report, config.output_dir)
+    if config.memory_enabled:
+        append_run_memory(report, resolve_memory_path(config.repo, config.memory_path))
 
     return report

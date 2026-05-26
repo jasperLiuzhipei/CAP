@@ -4,8 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-
 ModelTransport = Literal["native", "chat_completions"]
+ToolStrategy = Literal["native", "compat_functions", "shell_only"]
 
 DEFAULT_PROVIDER = "openai"
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
@@ -22,6 +22,7 @@ class ProviderSpec:
     default_model: str | None = None
     base_url: str | None = None
     env_prefix: str | None = None
+    tool_strategy: ToolStrategy | None = None
 
     @property
     def prefix(self) -> str:
@@ -36,6 +37,7 @@ class ResolvedModelConfig:
     display_name: str
     model: str
     transport: ModelTransport
+    tool_strategy: ToolStrategy
     api_key_env: str
     api_key: str | None
     base_url: str | None = None
@@ -50,7 +52,8 @@ class ResolvedModelConfig:
         key_state = "set" if self.api_key else "missing"
         return (
             f"{self.display_name} model={self.model} transport={self.transport} "
-            f"base_url={base_url} api_key_env={self.api_key_env} api_key={key_state}"
+            f"tool_strategy={self.tool_strategy} base_url={base_url} "
+            f"api_key_env={self.api_key_env} api_key={key_state}"
         )
 
     def public_dict(self) -> dict[str, str | bool | None]:
@@ -59,6 +62,7 @@ class ResolvedModelConfig:
             "display_name": self.display_name,
             "model": self.model,
             "transport": self.transport,
+            "tool_strategy": self.tool_strategy,
             "api_key_env": self.api_key_env,
             "base_url": self.base_url,
             "tracing_disabled": self.tracing_disabled,
@@ -70,6 +74,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         provider="openai",
         display_name="OpenAI",
         transport="native",
+        tool_strategy="native",
         api_key_env="OPENAI_API_KEY",
         default_model=DEFAULT_OPENAI_MODEL,
     ),
@@ -77,6 +82,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         provider="deepseek",
         display_name="DeepSeek",
         transport="chat_completions",
+        tool_strategy="compat_functions",
         api_key_env="DEEPSEEK_API_KEY",
         default_model="deepseek-v4-flash",
         base_url="https://api.deepseek.com",
@@ -85,6 +91,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         provider="dashscope",
         display_name="Alibaba DashScope",
         transport="chat_completions",
+        tool_strategy="compat_functions",
         api_key_env="DASHSCOPE_API_KEY",
         default_model="qwen-plus",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -93,6 +100,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         provider="ark",
         display_name="Volcengine Ark",
         transport="chat_completions",
+        tool_strategy="compat_functions",
         api_key_env="ARK_API_KEY",
         default_model=None,
         base_url="https://ark.cn-beijing.volces.com/api/v3",
@@ -101,6 +109,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         provider="custom",
         display_name="Custom OpenAI-compatible",
         transport="chat_completions",
+        tool_strategy="compat_functions",
         api_key_env="COPILOT_API_KEY",
         default_model=None,
         base_url=None,
@@ -154,6 +163,44 @@ def _normalize_transport(transport: str | None, default: ModelTransport) -> Mode
     )
 
 
+def _normalize_tool_strategy(
+    strategy: str | None,
+    *,
+    transport: ModelTransport,
+    default: ToolStrategy,
+) -> ToolStrategy:
+    if not strategy:
+        resolved = default
+    else:
+        normalized = strategy.strip().lower().replace("-", "_")
+        aliases = {
+            "openai_native": "native",
+            "native": "native",
+            "compat": "compat_functions",
+            "compatible": "compat_functions",
+            "compat_function": "compat_functions",
+            "compat_functions": "compat_functions",
+            "functions": "compat_functions",
+            "function_tools": "compat_functions",
+            "shell": "shell_only",
+            "shell_only": "shell_only",
+        }
+        if normalized not in aliases:
+            raise ValueError(
+                "COPILOT_TOOL_STRATEGY must be `native`, `compat_functions`, or `shell_only`."
+            )
+        resolved = aliases[normalized]
+
+    if transport == "native" and resolved != "native":
+        raise ValueError("Native model transport requires COPILOT_TOOL_STRATEGY=native.")
+    if transport == "chat_completions" and resolved == "native":
+        raise ValueError(
+            "Chat Completions transport cannot use native OpenAI sandbox tools. "
+            "Use COPILOT_TOOL_STRATEGY=compat_functions or shell_only."
+        )
+    return resolved
+
+
 def resolve_model_config(
     *,
     provider: str | None = None,
@@ -161,6 +208,7 @@ def resolve_model_config(
     base_url: str | None = None,
     api_key_env: str | None = None,
     transport: str | None = None,
+    tool_strategy: str | None = None,
     require_api_key: bool = True,
 ) -> ResolvedModelConfig:
     """Resolve the active model route from CLI values, .env, and provider defaults."""
@@ -196,6 +244,18 @@ def resolve_model_config(
         transport or os.getenv("COPILOT_MODEL_TRANSPORT"),
         spec.transport,
     )
+    default_tool_strategy: ToolStrategy = (
+        "native"
+        if resolved_transport == "native"
+        else (spec.tool_strategy or "compat_functions")
+    )
+    resolved_tool_strategy = _normalize_tool_strategy(
+        tool_strategy
+        or os.getenv("COPILOT_TOOL_STRATEGY")
+        or os.getenv(f"{prefix}_TOOL_STRATEGY"),
+        transport=resolved_transport,
+        default=default_tool_strategy,
+    )
     resolved_api_key_env = (
         api_key_env
         or os.getenv("COPILOT_API_KEY_ENV")
@@ -207,7 +267,11 @@ def resolve_model_config(
     resolved_api_key = generic_key or provider_key
     resolved_api_key_env_label = "COPILOT_API_KEY" if generic_key else resolved_api_key_env
 
-    if resolved_transport == "chat_completions" and provider_id != "openai" and not resolved_base_url:
+    if (
+        resolved_transport == "chat_completions"
+        and provider_id != "openai"
+        and not resolved_base_url
+    ):
         raise ValueError(
             f"Provider `{provider_id}` uses Chat Completions compatibility and requires a base URL."
         )
@@ -223,6 +287,7 @@ def resolve_model_config(
         display_name=spec.display_name,
         model=resolved_model,
         transport=resolved_transport,
+        tool_strategy=resolved_tool_strategy,
         api_key_env=resolved_api_key_env_label,
         api_key=resolved_api_key,
         base_url=resolved_base_url,

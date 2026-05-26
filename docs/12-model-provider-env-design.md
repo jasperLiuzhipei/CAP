@@ -6,6 +6,7 @@
 
 - OpenAI 默认保持原生：`provider=openai` 时优先传模型字符串给 Agents SDK，让 SDK 自己选择原生 OpenAI provider 和 Responses 能力。
 - 非 OpenAI 走兼容模型对象：DeepSeek、DashScope、Ark、custom provider 使用 SDK 官方推荐的 `AsyncOpenAI(base_url=..., api_key=...)` + `OpenAIChatCompletionsModel(...)`。
+- 工具能力分层适配：OpenAI 使用原生 sandbox tools；Chat Completions provider 默认使用函数工具兼容层，必要时可降级为 shell-only。
 - `.env` 只表达部署配置，不写业务策略：provider、model、base URL、key env 是配置；agent prompt、sandbox policy、memory policy 不放在 `.env`。
 - 支持两级密钥：正常使用 provider-specific key，例如 `DEEPSEEK_API_KEY`；自动化或临时实验可以用通用 `COPILOT_API_KEY` 覆盖。
 - 不把真实 key 写进代码、文档、报告：运行报告只保存 provider、model、transport、base_url 和 key env 名，不保存 key 内容。
@@ -14,9 +15,9 @@
 
 优先级从高到低：
 
-1. CLI 参数：`--provider`、`--model`、`--base-url`、`--api-key-env`、`--model-transport`。
-2. 平台级 `.env`：`COPILOT_MODEL_PROVIDER`、`COPILOT_MODEL`、`COPILOT_BASE_URL`、`COPILOT_API_KEY_ENV`、`COPILOT_MODEL_TRANSPORT`。
-3. 供应商级 `.env`：`OPENAI_MODEL`、`DEEPSEEK_MODEL`、`DASHSCOPE_MODEL`、`ARK_MODEL` 等。
+1. CLI 参数：`--provider`、`--model`、`--base-url`、`--api-key-env`、`--model-transport`、`--tool-strategy`。
+2. 平台级 `.env`：`COPILOT_MODEL_PROVIDER`、`COPILOT_MODEL`、`COPILOT_BASE_URL`、`COPILOT_API_KEY_ENV`、`COPILOT_MODEL_TRANSPORT`、`COPILOT_TOOL_STRATEGY`。
+3. 供应商级 `.env`：`OPENAI_MODEL`、`DEEPSEEK_MODEL`、`DEEPSEEK_TOOL_STRATEGY`、`DASHSCOPE_MODEL`、`ARK_MODEL` 等。
 4. 内置 provider 默认值：例如 DeepSeek 默认 `deepseek-v4-flash`，DashScope 默认 `qwen-plus`。
 
 密钥解析优先级：
@@ -27,13 +28,13 @@
 
 ## Provider 矩阵
 
-| provider | 默认 transport | 默认 key env | 默认 model | 默认 base URL |
-| --- | --- | --- | --- | --- |
-| `openai` | `native` | `OPENAI_API_KEY` | `gpt-5.5` | SDK 默认 |
-| `deepseek` | `chat_completions` | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` | `https://api.deepseek.com` |
-| `dashscope` | `chat_completions` | `DASHSCOPE_API_KEY` | `qwen-plus` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `ark` | `chat_completions` | `ARK_API_KEY` | 必填 | `https://ark.cn-beijing.volces.com/api/v3` |
-| `custom` | `chat_completions` | `COPILOT_API_KEY` | 必填 | 必填 |
+| provider | 默认 transport | 默认 tool strategy | 默认 key env | 默认 model | 默认 base URL |
+| --- | --- | --- | --- | --- | --- |
+| `openai` | `native` | `native` | `OPENAI_API_KEY` | `gpt-5.5` | SDK 默认 |
+| `deepseek` | `chat_completions` | `compat_functions` | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` | `https://api.deepseek.com` |
+| `dashscope` | `chat_completions` | `compat_functions` | `DASHSCOPE_API_KEY` | `qwen-plus` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `ark` | `chat_completions` | `compat_functions` | `ARK_API_KEY` | 必填 | `https://ark.cn-beijing.volces.com/api/v3` |
+| `custom` | `chat_completions` | `compat_functions` | `COPILOT_API_KEY` | 必填 | 必填 |
 
 Ark 的模型值经常是控制台里的 endpoint id 或已部署模型 id，所以我们不在代码里硬编码一个默认模型，避免“看起来能跑、实际打错 endpoint”的隐患。
 
@@ -81,6 +82,14 @@ ARK_API_KEY=your-ark-api-key
 
 - `transport=native`：把 `model` 字符串传给 `SandboxAgent`，保持 Agents SDK 原生路径。
 - `transport=chat_completions`：构建 `OpenAIChatCompletionsModel`，把兼容 provider 作为具体 model object 交给 `Agent.model`。
+
+`COPILOT_TOOL_STRATEGY` 控制沙箱工具如何暴露给模型：
+
+- `native`：只给 OpenAI 原生 Responses 路径使用，保留 SDK 默认 `Filesystem`、`Shell`、`Compaction`。
+- `compat_functions`：给 DeepSeek、千问、方舟等 Chat Completions provider 使用普通函数工具版 `apply_patch`，再配合 `Shell`，尽量接近原生可审计 patch 流程。
+- `shell_only`：最低兼容模式，只暴露 shell。适合某个 provider 的 function calling 不稳定时临时降级。
+
+如果只想调整某个 provider，优先使用供应商级变量，例如 `DEEPSEEK_TOOL_STRATEGY=shell_only`；`COPILOT_TOOL_STRATEGY` 更适合临时全局覆盖。
 
 这个边界后续可以继续扩展：
 
