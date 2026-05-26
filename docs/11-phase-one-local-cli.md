@@ -17,10 +17,14 @@ repo path + task
 
 - 用 `Manifest(entries={"repo": LocalDir(src=...)})` 声明 workspace。
 - 用 `SandboxAgent` 定义 coding agent。
-- 用 `Capabilities.default()` 暴露 shell、filesystem、compaction 等默认 sandbox 能力。
+- OpenAI 原生路径用 `Capabilities.default()` 暴露 shell、filesystem、compaction 等默认 sandbox 能力。
+- Chat Completions 兼容路径默认用函数工具版 `apply_patch` 加 `Shell`，不能使用原生 Responses-only 工具时仍保留可审计 patch 流程。
 - 用 developer-owned sandbox lifecycle，这样 run 后可以在同一个 sandbox 里收集 diff 和验证结果。
 - 用 `ResolvedModelConfig` 管理 provider/model/key/base URL，OpenAI 走原生 model string，第三方 provider 走 `OpenAIChatCompletionsModel`。
 - 默认用 `RunConfig(tracing_disabled=True)` 让本地 PoC 不依赖 tracing 配置。
+- 默认 `max_turns=32`，给 Chat Completions 兼容模型留出足够工具调用回合；prompt 会要求模型保持 inspect -> patch -> verify -> final 的短循环。
+- 用 project memory 把长期上下文放在 `.copilot/memory.md`，并在 prompt 中作为背景上下文输入。
+- 用 `runs/` 保存 report、diff、verification，再由 `apply-run` 经过 `git apply --check` 后应用回真实仓库。
 
 ## 安装
 
@@ -68,6 +72,7 @@ copilot-agent run \
   --task "Fix the failing login test with the smallest safe change." \
   --test-cmd "python -m pytest tests/login" \
   --provider deepseek \
+  --tool-strategy compat_functions \
   --model deepseek-v4-flash
 ```
 
@@ -79,9 +84,46 @@ copilot-agent run \
 - 可选 verification 命令输出。
 - 保存目录，例如 `runs/run_20260521_123456/`。
 
+## Copilot 工作流命令
+
+初始化目标仓库：
+
+```bash
+copilot-agent init --repo /path/to/repo
+```
+
+启用 memory 运行：
+
+```bash
+copilot-agent run \
+  --repo /path/to/repo \
+  --task "Refactor the parser and keep tests passing." \
+  --test-cmd "python -m pytest" \
+  --memory \
+  --host-verify
+```
+
+查看历史 run：
+
+```bash
+copilot-agent runs
+copilot-agent show-run --run run_20260521_123456_000000 --diff --final
+```
+
+把 sandbox diff 应用回真实仓库：
+
+```bash
+copilot-agent apply-run --run run_20260521_123456_000000 --check
+copilot-agent apply-run --run run_20260521_123456_000000
+```
+
+`--host-verify` 会把 sandbox diff 应用到临时 repo 副本，再在沙箱外运行验证命令。它用于解决本地 macOS sandbox 中系统 Python 或 Anaconda Python 被文件系统限制阻断的问题，同时仍然避免直接污染真实仓库。
+
 ## 当前边界
 
 - 这是本地 PoC，默认使用 `UnixLocalSandboxClient`。
 - 还没有实现 approval policy，高风险命令控制会在阶段 3 做。
 - 还没有实现 Web UI、数据库、长期 memory。
-- 如果输入目录不是 git repo，CLI 会在 sandbox 副本里初始化临时 git baseline，方便收集 diff；不会修改宿主机目录。
+- 已有本地 project memory，但还不是向量库或跨项目检索。
+- 本地 macOS `UnixLocalSandboxClient` 可能无法运行系统 Python；此时优先使用 `--host-verify`，生产环境建议迁移到 Docker sandbox 或 hosted sandbox。
+- 如果输入目录不是 git repo，CLI 会在 sandbox 副本里初始化临时 git baseline，方便收集 diff；默认不会修改宿主机目录，只有执行 `apply-run` 才会应用修改。

@@ -27,7 +27,8 @@
 
 - 已建立第一版产品需求、架构、安全、memory、多模型和路线图文档。
 - 已创建阶段一最小 CLI skeleton：`copilot-agent run --repo ... --task ...`。
-- 已验证 DeepSeek 兼容 API 可通过 shell-only sandbox 路径完成 sample repo 修复任务。
+- 已验证 DeepSeek 兼容 API 可运行 sample repo 修复任务，并新增函数工具版 `apply_patch` 兼容层，让 Chat Completions provider 更接近 OpenAI 原生 patch 流程。
+- 已补齐本地 Copilot MVP 闭环：项目初始化、project memory、历史 run 查看、sandbox diff 审计、手动应用 run patch。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
@@ -58,3 +59,35 @@ DEEPSEEK_API_KEY=<your-deepseek-api-key>
 ```
 
 `.env` 已经被 `.gitignore` 忽略。
+
+## Local Copilot MVP
+
+初始化目标仓库的 Copilot 元数据：
+
+```bash
+copilot-agent init --repo examples/sample_repo
+```
+
+运行任务时，如果目标仓库存在 `.copilot/memory.md`，CLI 会自动把它作为项目记忆读入 prompt，并在运行后追加简短记忆。也可以显式开启：
+
+```bash
+copilot-agent run \
+  --repo examples/sample_repo \
+  --task "Fix the discount calculation bug and run tests." \
+  --test-cmd "python -m pytest" \
+  --memory \
+  --host-verify
+```
+
+查看和应用沙箱结果：
+
+```bash
+copilot-agent runs
+copilot-agent show-run --run run_YYYYMMDD_HHMMSS_xxxxxx --diff --final
+copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx --check
+copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx
+```
+
+`apply-run` 会先执行 `git apply --check`，通过后才把保存的 sandbox diff 应用回真实仓库。
+
+如果本地 macOS sandbox 里的 Python runtime 不可用，可以使用 `--host-verify`。它会把 sandbox diff 应用到一个临时仓库副本，再在沙箱外运行同一条验证命令，不会直接修改真实仓库。

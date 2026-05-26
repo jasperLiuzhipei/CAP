@@ -1,8 +1,13 @@
 .venv/
 .env
+.copilot/
+.tmp/
 __pycache__/
 *.py[cod]
+*.swp
+*.swo
 .pytest_cache/
+.coverage
 .mypy_cache/
 .ruff_cache/
 runs/
