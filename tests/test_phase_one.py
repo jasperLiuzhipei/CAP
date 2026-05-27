@@ -3,20 +3,36 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from copilot_agent import phase_one as phase_one_module
 from copilot_agent.model_config import resolve_model_config
 from copilot_agent.phase_one import (
     CommandResult,
     FileSnapshot,
     PhaseOneConfig,
     PhaseOneReport,
+    SandboxRuntimeReport,
+    _build_sandbox_test_command,
+    _command_needs_python,
+    _command_uses_pytest,
     _dependency_help,
     _diff_snapshots,
     _extract_tool_calls,
+    _format_sandbox_runtime_log,
+    _python_executables_from_test_cmd,
+    _python_prefixes_from_host,
+    _python_runtime_roots,
+    _pyvenv_home_roots,
     _report_to_json,
+    _resolve_executable,
     _run_host_verification,
+    _safe_unique_paths,
+    _sandbox_pytest_check_command,
+    _sandbox_python_check_command,
+    _sandbox_runtime_grant_paths,
     _should_snapshot_file,
     _snapshot_local_tree,
     build_phase_one_prompt,
@@ -148,6 +164,124 @@ def test_build_prompt_for_strategies_and_memory(tmp_path: Path) -> None:
     assert "SDK-native sandbox tools" in build_phase_one_prompt(native)
     assert "Project memory" in build_phase_one_prompt(compat)
     assert "Do not call apply_patch" in build_phase_one_prompt(shell)
+    assert "sandbox-safe verification command" in build_phase_one_prompt(compat)
+
+
+def test_sandbox_test_command_rewrites_host_python_and_pytest(tmp_path: Path) -> None:
+    config = PhaseOneConfig(
+        repo=tmp_path,
+        task="task",
+        test_cmd="/Users/me/project/.venv/bin/python -m pytest tests",
+        sandbox_python="python3",
+    )
+
+    command, notes = _build_sandbox_test_command(config)
+
+    assert command is not None
+    assert "/Users/me/project/.venv/bin/python" not in command
+    assert "python3 -m pytest tests" in command
+    assert "PYTEST_ADDOPTS" in command
+    assert "../.copilot-runtime/site" in command
+    assert any("absolute host Python" in note for note in notes)
+    assert any("pytest debugging plugin" in note for note in notes)
+
+
+def test_sandbox_runtime_command_helper_edges(tmp_path: Path) -> None:
+    no_test = PhaseOneConfig(repo=tmp_path, task="task")
+    disabled = PhaseOneConfig(
+        repo=tmp_path,
+        task="task",
+        test_cmd="python -m pytest",
+        sandbox_runtime_enabled=False,
+    )
+
+    assert _build_sandbox_test_command(no_test) == (None, [])
+    assert _build_sandbox_test_command(disabled) == (
+        "python -m pytest",
+        ["sandbox runtime provisioning disabled"],
+    )
+    assert not _command_uses_pytest(None)
+    assert _command_uses_pytest("python -m pytest tests")
+    assert not _command_uses_pytest("broken '")
+    assert not _command_needs_python(None)
+    assert _command_needs_python("python -c 'print(1)'")
+    assert not _command_needs_python("echo ok")
+    assert _python_executables_from_test_cmd(None) == []
+    assert _python_executables_from_test_cmd("broken ' /tmp/venv/bin/python -m pytest") == [
+        "/tmp/venv/bin/python"
+    ]
+    assert "import encodings" in _sandbox_python_check_command("python3")
+    assert "import pytest" in _sandbox_pytest_check_command("python3")
+
+
+def test_sandbox_runtime_grants_include_python_roots(tmp_path: Path) -> None:
+    config = PhaseOneConfig(
+        repo=tmp_path,
+        task="task",
+        test_cmd="python3 -m pytest tests",
+    )
+
+    grants = _sandbox_runtime_grant_paths(config)
+
+    assert grants
+    assert any(path.name in {"python", "python3"} or path.exists() for path in grants)
+
+
+def test_python_runtime_path_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    python = bin_dir / "python"
+    python.write_text("", encoding="utf-8")
+    (tmp_path / "venv" / "pyvenv.cfg").write_text(
+        f"home = {tmp_path / 'base' / 'bin'}\n",
+        encoding="utf-8",
+    )
+
+    assert _resolve_executable("") is None
+    assert _resolve_executable(str(python)) == python
+    assert _pyvenv_home_roots(python) == [tmp_path / "base"]
+
+    monkeypatch.setattr(phase_one_module, "_resolve_executable", lambda _: None)
+    assert _python_runtime_roots("missing-python") == []
+
+    monkeypatch.setattr(phase_one_module, "_resolve_executable", lambda _: python)
+    monkeypatch.setattr(phase_one_module, "_python_prefixes_from_host", lambda _: [tmp_path])
+    monkeypatch.setattr(phase_one_module, "_pyvenv_home_roots", lambda _: [tmp_path / "base"])
+    assert _python_runtime_roots("python") == [tmp_path / "venv", tmp_path, tmp_path / "base"]
+
+    safe = _safe_unique_paths([tmp_path, tmp_path, Path("/"), tmp_path / "missing"])
+    assert safe == [tmp_path.resolve()]
+
+
+def test_python_prefix_probe_handles_host_process_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    python = tmp_path / "python"
+
+    def ok_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout='["/runtime", "/base"]')
+
+    monkeypatch.setattr(phase_one_module.subprocess, "run", ok_run)
+    assert _python_prefixes_from_host(python) == [Path("/runtime"), Path("/base")]
+
+    def failed_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=1, stdout="")
+
+    monkeypatch.setattr(phase_one_module.subprocess, "run", failed_run)
+    assert _python_prefixes_from_host(python) == []
+
+    def bad_json_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="not-json")
+
+    monkeypatch.setattr(phase_one_module.subprocess, "run", bad_json_run)
+    assert _python_prefixes_from_host(python) == []
+
+    def raising_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        raise OSError("missing")
+
+    monkeypatch.setattr(phase_one_module.subprocess, "run", raising_run)
+    assert _python_prefixes_from_host(python) == []
 
 
 def test_snapshot_and_diff_helpers(tmp_path: Path) -> None:
@@ -201,6 +335,14 @@ def test_extract_tool_calls() -> None:
 
 
 def test_report_serialization_and_save(tmp_path: Path) -> None:
+    runtime = SandboxRuntimeReport(
+        enabled=True,
+        python_command="python3",
+        original_test_cmd="python -m pytest",
+        sandbox_test_cmd="PYTEST_ADDOPTS='-p no:debugging' python -m pytest",
+        python_check=CommandResult("python3 -c check", 0, "ok", ""),
+        notes=["runtime ok"],
+    )
     report = PhaseOneReport(
         run_id="run_test",
         repo=str(tmp_path),
@@ -214,6 +356,7 @@ def test_report_serialization_and_save(tmp_path: Path) -> None:
         final_output="final",
         git_status="M file.py",
         diff="diff",
+        sandbox_runtime=runtime,
         verification=CommandResult("pytest", 0, "ok", ""),
         host_verification=CommandResult("pytest", 0, "host ok", ""),
     )
@@ -222,9 +365,13 @@ def test_report_serialization_and_save(tmp_path: Path) -> None:
     run_dir = save_report(report, tmp_path / "runs")
 
     assert payload["verification"]["exit_code"] == 0
+    assert payload["sandbox_runtime"]["python_check"]["exit_code"] == 0
     assert payload["host_verification"]["stdout"] == "host ok"
     assert report.saved_dir == str(run_dir)
     assert (run_dir / "report.json").exists()
+    assert (run_dir / "sandbox_runtime.log").exists()
+    assert "runtime ok" in (run_dir / "sandbox_runtime.log").read_text(encoding="utf-8")
+    assert "[python_check]" in _format_sandbox_runtime_log(runtime)
     assert (run_dir / "verification.log").read_text(encoding="utf-8") == "ok"
     assert (run_dir / "host_verification.log").read_text(encoding="utf-8") == "host ok"
 

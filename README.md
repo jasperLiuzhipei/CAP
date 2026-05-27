@@ -26,6 +26,7 @@
 - [Phase 2 Run Worker](docs/15-phase-two-run-worker.md)
 - [Phase 2 Run Events and Timeline](docs/16-phase-two-run-events.md)
 - [Phase 2 Async Worker and Live Events](docs/17-phase-two-async-worker.md)
+- [Phase 2 Sandbox Runtime Provisioning](docs/18-phase-two-sandbox-runtime.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -39,6 +40,7 @@
 - 已接通第二阶段本地 run worker：API 创建 queued run 后，可触发 `run_phase_one()` 执行并把结果写回原 run。
 - 已补齐第二阶段 run timeline：RunEvent 持久化、events API、SSE 格式事件流和关键生命周期事件。
 - 已补齐第二阶段后台 worker：可启动/停止后台队列，自动消费 queued run，并支持 `follow=true` 实时事件流。
+- 已补齐第二阶段 sandbox runtime provisioning：为 Python runtime 增加 path grants、health check、pytest sandbox-safe 命令归一化，解决 macOS sandbox 中 `encodings` 缺失导致 pytest 不稳定的问题。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
@@ -100,7 +102,9 @@ copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx
 
 `apply-run` 会先执行 `git apply --check`，通过后才把保存的 sandbox diff 应用回真实仓库。
 
-如果本地 macOS sandbox 里的 Python runtime 不可用，可以使用 `--host-verify`。它会把 sandbox diff 应用到一个临时仓库副本，再在沙箱外运行同一条验证命令，不会直接修改真实仓库。
+CLI 默认会开启 sandbox runtime provisioning：如果验证命令里出现宿主机绝对路径 Python，例如 `.venv/bin/python -m pytest tests`，sandbox 会自动改写为 sandbox-safe Python 命令，并给 Python 标准库和 venv roots 增加只读授权。
+
+如果仍然希望双保险，可以继续使用 `--host-verify`。它会把 sandbox diff 应用到一个临时仓库副本，再在沙箱外运行原始验证命令，不会直接修改真实仓库。
 
 ## Local API
 

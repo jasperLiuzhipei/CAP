@@ -74,6 +74,8 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
             RunExecutionOptions(
                 test_cmd="pytest tests",
                 output_dir=tmp_path / "runs",
+                sandbox_python="python3.13",
+                sandbox_runtime_enabled=False,
                 require_api_key=False,
             ),
         )
@@ -88,6 +90,7 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
         "run.queued",
         "run.started",
         "run.completed",
+        "verification.completed",
         "artifact.created",
         "artifact.created",
         "artifact.created",
@@ -100,6 +103,8 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
     assert config.model_config.provider == "deepseek"
     assert config.model_config.tool_strategy == "compat_functions"
     assert config.test_cmd == "pytest tests"
+    assert not config.sandbox_runtime_enabled
+    assert config.sandbox_python == "python3.13"
     assert config.memory_enabled
     assert config.memory_path == Path(project.memory_path)
 

@@ -62,6 +62,8 @@ class RunExecute(BaseModel):
     output_dir: str = "runs"
     memory_enabled: bool | None = None
     host_verify: bool = False
+    sandbox_runtime_enabled: bool = True
+    sandbox_python: str = "python3"
     require_api_key: bool = True
 
     def to_options(self) -> RunExecutionOptions:
@@ -71,6 +73,8 @@ class RunExecute(BaseModel):
             output_dir=Path(self.output_dir),
             memory_enabled=self.memory_enabled,
             host_verify=self.host_verify,
+            sandbox_runtime_enabled=self.sandbox_runtime_enabled,
+            sandbox_python=self.sandbox_python,
             require_api_key=self.require_api_key,
         )
 

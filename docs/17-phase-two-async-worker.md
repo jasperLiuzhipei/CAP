@@ -123,10 +123,11 @@ run_phase_one()
 
 ## 下一步
 
-建议下一块做 sandbox runtime/provisioning：
+sandbox runtime/provisioning 已在 [Phase 2 Sandbox Runtime Provisioning](18-phase-two-sandbox-runtime.md) 中实现第一版：
 
-1. 抽象 sandbox backend 接口。
-2. 为 Unix local backend 增加 Python runtime 检测。
-3. 生成 dependency provisioning plan。
-4. 为 Docker backend 预留 manifest/build 接口。
-5. 解决之前 macOS sandbox 中 `encodings` 缺失的问题。
+1. Unix local backend 增加 Python runtime grants。
+2. sandbox 执行前增加 Python `encodings` health check。
+3. pytest 命令自动归一化为 sandbox-safe command。
+4. runtime 和 verification 结果写入 artifact 与 RunEvent。
+
+下一块建议继续抽象 sandbox backend 接口，为 Docker sandbox 和多语言 dependency provisioning 做准备。

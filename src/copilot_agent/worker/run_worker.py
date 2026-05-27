@@ -19,6 +19,8 @@ class RunExecutionOptions:
     output_dir: Path = Path("runs")
     memory_enabled: bool | None = None
     host_verify: bool = False
+    sandbox_runtime_enabled: bool = True
+    sandbox_python: str = "python3"
     require_api_key: bool = True
 
 
@@ -106,4 +108,6 @@ class RunWorker:
             memory_enabled=memory_enabled,
             memory_path=memory_path,
             host_verify=options.host_verify,
+            sandbox_runtime_enabled=options.sandbox_runtime_enabled,
+            sandbox_python=options.sandbox_python,
         )

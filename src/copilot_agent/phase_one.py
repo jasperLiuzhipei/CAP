@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -17,6 +20,7 @@ DEFAULT_MODEL = DEFAULT_OPENAI_MODEL
 DEFAULT_WORKFLOW_NAME = "Copilot phase-one local coding task"
 SNAPSHOT_SKIP_DIRS = {
     ".git",
+    ".copilot-runtime",
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
@@ -27,6 +31,12 @@ SNAPSHOT_SKIP_DIRS = {
     "venv",
 }
 SNAPSHOT_MAX_FILE_BYTES = 1_000_000
+SANDBOX_RUNTIME_DIR = ".copilot-runtime"
+SANDBOX_RUNTIME_SITE = f"{SANDBOX_RUNTIME_DIR}/site"
+ABSOLUTE_PYTHON_RE = re.compile(
+    r"(?<!\S)(/[^\s'\";&|]+/bin/python(?:\d+(?:\.\d+)?)?)(?=\s|$)"
+)
+PYTHON_EXECUTABLE_RE = re.compile(r"python(?:\d+(?:\.\d+)?)?$")
 
 
 @dataclass(frozen=True)
@@ -45,6 +55,8 @@ class PhaseOneConfig:
     memory_enabled: bool = False
     memory_path: Path | None = None
     host_verify: bool = False
+    sandbox_runtime_enabled: bool = True
+    sandbox_python: str = "python3"
 
 
 @dataclass(frozen=True)
@@ -59,6 +71,18 @@ class CommandResult:
         if self.stderr:
             return f"{self.stdout}{self.stderr}"
         return self.stdout
+
+
+@dataclass
+class SandboxRuntimeReport:
+    enabled: bool
+    python_command: str
+    original_test_cmd: str | None = None
+    sandbox_test_cmd: str | None = None
+    python_check: CommandResult | None = None
+    pytest_check: CommandResult | None = None
+    dependency_install: CommandResult | None = None
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -80,6 +104,7 @@ class PhaseOneReport:
     git_baseline_log: str = ""
     git_status: str = ""
     diff: str = ""
+    sandbox_runtime: SandboxRuntimeReport | None = None
     verification: CommandResult | None = None
     host_verification: CommandResult | None = None
     saved_dir: str | None = None
@@ -102,8 +127,9 @@ def validate_config(config: PhaseOneConfig) -> None:
 
 
 def build_phase_one_prompt(config: PhaseOneConfig) -> str:
+    sandbox_test_cmd, sandbox_notes = _build_sandbox_test_command(config)
     verification = (
-        f"Run this exact verification command from `repo/`: `{config.test_cmd}`."
+        f"Run this sandbox-safe verification command from `repo/`: `{sandbox_test_cmd}`."
         if config.test_cmd
         else (
             "Infer and run the most relevant lightweight verification command "
@@ -150,6 +176,14 @@ def build_phase_one_prompt(config: PhaseOneConfig) -> str:
             "and remaining risks."
         ),
     ]
+
+    if sandbox_notes:
+        prompt_parts.extend(
+            [
+                "- The verification command was normalized for the sandbox runtime:",
+                *[f"  - {note}" for note in sandbox_notes],
+            ]
+        )
 
     if config.memory_enabled:
         memory_text = load_memory_text(config.repo, config.memory_path)
@@ -205,6 +239,7 @@ def _load_agents_sdk() -> dict[str, Any]:  # pragma: no cover
         from agents.sandbox.capabilities.tools.apply_patch_tool import SandboxApplyPatchTool
         from agents.sandbox.entries import LocalDir
         from agents.sandbox.sandboxes.unix_local import UnixLocalSandboxClient
+        from agents.sandbox.workspace_paths import SandboxPathGrant
     except ModuleNotFoundError as exc:
         raise RuntimeError(_dependency_help(exc.name or "unknown")) from exc
 
@@ -222,6 +257,7 @@ def _load_agents_sdk() -> dict[str, Any]:  # pragma: no cover
         "SandboxAgent": SandboxAgent,
         "SandboxApplyPatchTool": SandboxApplyPatchTool,
         "SandboxRunConfig": SandboxRunConfig,
+        "SandboxPathGrant": SandboxPathGrant,
         "Shell": Shell,
         "UnixLocalSandboxClient": UnixLocalSandboxClient,
         "set_tracing_disabled": set_tracing_disabled,
@@ -315,11 +351,221 @@ def _build_chat_completions_filesystem_capability(sdk: dict[str, Any]) -> Any:  
     return ChatCompletionsFilesystem()
 
 
+def _build_sandbox_test_command(config: PhaseOneConfig) -> tuple[str | None, list[str]]:
+    """Return the verification command that should run inside the SDK sandbox."""
+
+    if config.test_cmd is None:
+        return None, []
+    if not config.sandbox_runtime_enabled:
+        return config.test_cmd, ["sandbox runtime provisioning disabled"]
+
+    command, notes = _rewrite_absolute_python_executables(
+        config.test_cmd,
+        sandbox_python=config.sandbox_python,
+    )
+    if _command_uses_pytest(command):
+        command = (
+            'PYTEST_ADDOPTS="-p no:debugging ${PYTEST_ADDOPTS:-}" '
+            f'PYTHONPATH="../{SANDBOX_RUNTIME_SITE}:${{PYTHONPATH:-}}" '
+            f"sh -c {shlex.quote(command)}"
+        )
+        notes.append(
+            "pytest debugging plugin is disabled in the sandbox to avoid macOS "
+            "pdb/readline crashes"
+        )
+    return command, notes
+
+
+def _rewrite_absolute_python_executables(
+    command: str,
+    *,
+    sandbox_python: str,
+) -> tuple[str, list[str]]:
+    notes: list[str] = []
+    quoted_sandbox_python = shlex.quote(sandbox_python)
+
+    def replace(match: re.Match[str]) -> str:
+        original = match.group(1)
+        if original == sandbox_python:
+            return original
+        notes.append(
+            f"absolute host Python `{original}` was replaced with sandbox Python "
+            f"`{sandbox_python}`"
+        )
+        return quoted_sandbox_python
+
+    return ABSOLUTE_PYTHON_RE.sub(replace, command), notes
+
+
+def _command_uses_pytest(command: str | None) -> bool:
+    if not command:
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    return any(Path(token).name == "pytest" for token in tokens) or " -m pytest" in command
+
+
+def _command_needs_python(command: str | None) -> bool:
+    if not command:
+        return False
+    if _command_uses_pytest(command):
+        return True
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    return any(_looks_like_python_executable(token) for token in tokens)
+
+
+def _looks_like_python_executable(token: str) -> bool:
+    return PYTHON_EXECUTABLE_RE.fullmatch(Path(token).name) is not None
+
+
+def _python_executables_from_test_cmd(test_cmd: str | None) -> list[str]:
+    if not test_cmd:
+        return []
+
+    candidates: list[str] = []
+    try:
+        tokens = shlex.split(test_cmd)
+    except ValueError:
+        tokens = test_cmd.split()
+    for token in tokens:
+        if _looks_like_python_executable(token):
+            candidates.append(token)
+    candidates.extend(match.group(1) for match in ABSOLUTE_PYTHON_RE.finditer(test_cmd))
+    return _unique_strings(candidates)
+
+
+def _sandbox_runtime_grant_paths(config: PhaseOneConfig) -> list[Path]:
+    if not config.sandbox_runtime_enabled:
+        return []
+
+    paths: list[Path] = [
+        Path(sys.prefix),
+        Path(sys.base_prefix),
+        Path(sys.exec_prefix),
+        Path(sys.base_exec_prefix),
+    ]
+    executables = [config.sandbox_python, *_python_executables_from_test_cmd(config.test_cmd)]
+    for executable in executables:
+        paths.extend(_python_runtime_roots(executable))
+    return _safe_unique_paths(paths)
+
+
+def _python_runtime_roots(executable: str) -> list[Path]:
+    resolved = _resolve_executable(executable)
+    if resolved is None:
+        return []
+
+    roots: list[Path] = []
+    executable_path = Path(resolved)
+    if executable_path.parent.name == "bin":
+        roots.append(executable_path.parent.parent)
+
+    roots.extend(_python_prefixes_from_host(executable_path))
+    roots.extend(_pyvenv_home_roots(executable_path))
+    return roots
+
+
+def _resolve_executable(executable: str) -> Path | None:
+    try:
+        parts = shlex.split(executable)
+    except ValueError:
+        parts = executable.split()
+    if not parts:
+        return None
+
+    candidate = Path(parts[0]).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    resolved = shutil.which(parts[0])
+    return Path(resolved) if resolved else None
+
+
+def _python_prefixes_from_host(executable: Path) -> list[Path]:
+    code = (
+        "import json, sys; "
+        "print(json.dumps([sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix]))"
+    )
+    try:
+        completed = subprocess.run(
+            [str(executable), "-c", code],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if completed.returncode != 0:
+        return []
+
+    try:
+        values = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return []
+    return [Path(value) for value in values if isinstance(value, str) and value]
+
+
+def _pyvenv_home_roots(executable: Path) -> list[Path]:
+    roots: list[Path] = []
+    venv_root = executable.parent.parent if executable.parent.name == "bin" else executable.parent
+    pyvenv = venv_root / "pyvenv.cfg"
+    if not pyvenv.exists():
+        return roots
+
+    for line in pyvenv.read_text(encoding="utf-8", errors="ignore").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip().lower() == "home":
+            home = Path(value.strip()).expanduser()
+            roots.append(home.parent if home.name == "bin" else home)
+    return roots
+
+
+def _safe_unique_paths(paths: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        try:
+            resolved = path.expanduser().resolve(strict=False)
+        except OSError:
+            resolved = path.expanduser()
+        if not resolved.is_absolute() or resolved.parent == resolved:
+            continue
+        if not resolved.exists():
+            continue
+        key = resolved.as_posix()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(resolved)
+    return unique
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
 def _build_agent(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:  # pragma: no cover
+    runtime_grants = [
+        sdk["SandboxPathGrant"](path=path, read_only=True)
+        for path in _sandbox_runtime_grant_paths(config)
+    ]
     manifest = sdk["Manifest"](
         entries={
             "repo": sdk["LocalDir"](src=config.repo),
-        }
+        },
+        extra_path_grants=tuple(runtime_grants),
     )
 
     if config.model_config.transport == "chat_completions":
@@ -357,6 +603,76 @@ async def _exec_text(sandbox: Any, command: str) -> CommandResult:  # pragma: no
         stdout=stdout,
         stderr=stderr,
     )
+
+
+async def _prepare_sandbox_runtime(
+    sandbox: Any,
+    config: PhaseOneConfig,
+) -> SandboxRuntimeReport:  # pragma: no cover
+    sandbox_test_cmd, notes = _build_sandbox_test_command(config)
+    report = SandboxRuntimeReport(
+        enabled=config.sandbox_runtime_enabled,
+        python_command=config.sandbox_python,
+        original_test_cmd=config.test_cmd,
+        sandbox_test_cmd=sandbox_test_cmd,
+        notes=notes,
+    )
+
+    if not config.sandbox_runtime_enabled:
+        return report
+    if not _command_needs_python(config.test_cmd):
+        report.notes.append("no Python-specific verification command detected")
+        return report
+
+    report.python_check = await _exec_text(
+        sandbox,
+        _sandbox_python_check_command(config.sandbox_python),
+    )
+    if report.python_check.exit_code != 0:
+        report.notes.append("sandbox Python health check failed")
+        return report
+
+    if _command_uses_pytest(config.test_cmd):
+        report.pytest_check = await _exec_text(
+            sandbox,
+            _sandbox_pytest_check_command(config.sandbox_python),
+        )
+        if report.pytest_check.exit_code != 0:
+            report.dependency_install = await _install_sandbox_pytest(
+                config.sandbox_python,
+                sandbox,
+            )
+            if report.dependency_install.exit_code == 0:
+                report.notes.append(f"installed pytest into {SANDBOX_RUNTIME_SITE}")
+            else:
+                report.notes.append("pytest dependency provisioning failed")
+    return report
+
+
+def _sandbox_python_check_command(python_command: str) -> str:
+    code = (
+        "import encodings, json, sys; "
+        "print(json.dumps({'executable': sys.executable, 'prefix': sys.prefix, "
+        "'base_prefix': sys.base_prefix}))"
+    )
+    return f"{shlex.quote(python_command)} -c {shlex.quote(code)}"
+
+
+def _sandbox_pytest_check_command(python_command: str) -> str:
+    code = "import pytest; print(getattr(pytest, '__version__', 'unknown'))"
+    return f"{shlex.quote(python_command)} -c {shlex.quote(code)}"
+
+
+async def _install_sandbox_pytest(
+    python_command: str,
+    sandbox: Any,
+) -> CommandResult:  # pragma: no cover
+    command = (
+        f"mkdir -p {shlex.quote(SANDBOX_RUNTIME_SITE)} && "
+        f"{shlex.quote(python_command)} -m pip install "
+        f"--target {shlex.quote(SANDBOX_RUNTIME_SITE)} pytest"
+    )
+    return await _exec_text(sandbox, command)
 
 
 async def _ensure_git_baseline(sandbox: Any) -> tuple[bool, str]:  # pragma: no cover
@@ -431,6 +747,7 @@ async def _snapshot_sandbox_tree(
         f"find {root} -type f "
         "! -path '*/.git/*' "
         "! -path '*/.copilot/*' "
+        "! -path '*/.copilot-runtime/*' "
         "! -path '*/.venv/*' "
         "! -path '*/__pycache__/*' "
         "! -path '*/node_modules/*' "
@@ -556,6 +873,11 @@ def save_report(report: PhaseOneReport, output_dir: Path) -> Path:
     (run_dir / "final.md").write_text(report.final_output, encoding="utf-8")
     (run_dir / "diff.patch").write_text(report.diff, encoding="utf-8")
     (run_dir / "git_status.txt").write_text(report.git_status, encoding="utf-8")
+    if report.sandbox_runtime is not None:
+        (run_dir / "sandbox_runtime.log").write_text(
+            _format_sandbox_runtime_log(report.sandbox_runtime),
+            encoding="utf-8",
+        )
     if report.verification is not None:
         (run_dir / "verification.log").write_text(
             report.verification.combined_output,
@@ -568,6 +890,35 @@ def save_report(report: PhaseOneReport, output_dir: Path) -> Path:
         )
 
     return run_dir
+
+
+def _format_sandbox_runtime_log(runtime: SandboxRuntimeReport) -> str:
+    sections = [
+        f"enabled={runtime.enabled}",
+        f"python_command={runtime.python_command}",
+        f"original_test_cmd={runtime.original_test_cmd or ''}",
+        f"sandbox_test_cmd={runtime.sandbox_test_cmd or ''}",
+    ]
+    if runtime.notes:
+        sections.append("notes:")
+        sections.extend(f"- {note}" for note in runtime.notes)
+    for label, result in (
+        ("python_check", runtime.python_check),
+        ("pytest_check", runtime.pytest_check),
+        ("dependency_install", runtime.dependency_install),
+    ):
+        if result is None:
+            continue
+        sections.extend(
+            [
+                "",
+                f"[{label}]",
+                f"$ {result.command}",
+                f"exit_code={result.exit_code}",
+                result.combined_output,
+            ]
+        )
+    return "\n".join(sections).rstrip() + "\n"
 
 
 def _copy_repo_for_host_verification(repo: Path, destination: Path) -> None:
@@ -663,6 +1014,7 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
 
     try:
         async with sandbox:
+            sandbox_runtime = await _prepare_sandbox_runtime(sandbox, config)
             baseline_created, baseline_log = (
                 (False, "skipped git baseline; using snapshot diff for Chat Completions route")
                 if config.model_config.transport == "chat_completions"
@@ -693,7 +1045,8 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
 
             verification = None
             if config.test_cmd:
-                verification = await _exec_text(sandbox, f"cd repo && {config.test_cmd}")
+                verification_command = sandbox_runtime.sandbox_test_cmd or config.test_cmd
+                verification = await _exec_text(sandbox, f"cd repo && {verification_command}")
 
             host_verification = None
             if config.test_cmd and config.host_verify:
@@ -725,6 +1078,7 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
                 git_baseline_log=baseline_log,
                 git_status=git_status_text,
                 diff=diff_text,
+                sandbox_runtime=sandbox_runtime,
                 verification=verification,
                 host_verification=host_verification,
             )
