@@ -16,7 +16,7 @@ from copilot_agent.backend.models import (
     ToolCall,
 )
 from copilot_agent.backend.service import ToolReview
-from copilot_agent.worker import RunExecutionOptions
+from copilot_agent.worker import BackgroundWorkerStatus, RunExecutionOptions
 
 
 class ProjectCreate(BaseModel):
@@ -75,6 +75,18 @@ class RunExecute(BaseModel):
         )
 
 
+class WorkerStatusResponse(BaseModel):
+    running: bool
+    queue_size: int
+    active_run_id: str | None
+    processed_count: int
+    failed_count: int
+
+    @classmethod
+    def from_domain(cls, status: BackgroundWorkerStatus) -> WorkerStatusResponse:
+        return cls(**status.__dict__)
+
+
 class RunResponse(BaseModel):
     id: str
     project_id: str
@@ -93,6 +105,11 @@ class RunResponse(BaseModel):
     @classmethod
     def from_domain(cls, run: RunRecord) -> RunResponse:
         return cls(**run.__dict__)
+
+
+class RunDispatchResponse(BaseModel):
+    run: RunResponse
+    worker: WorkerStatusResponse
 
 
 class ToolReviewCreate(BaseModel):
