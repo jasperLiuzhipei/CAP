@@ -31,6 +31,7 @@
 - [Phase 2 Web UI and Sandbox Backends](docs/20-phase-two-web-ui-sandbox-backends.md)
 - [Phase 3 Sandbox Backend Protocol](docs/21-phase-three-sandbox-backend-protocol.md)
 - [Phase 3 Docker Sandbox Backend](docs/22-phase-three-docker-sandbox-backend.md)
+- [Memory v2: Claude Code Inspired Design](docs/23-memory-v2-claude-code-inspired.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -88,7 +89,7 @@ DEEPSEEK_API_KEY=<your-deepseek-api-key>
 copilot-agent init --repo examples/sample_repo
 ```
 
-运行任务时，如果目标仓库存在 `.copilot/memory.md`，CLI 会自动把它作为项目记忆读入 prompt，并在运行后追加简短记忆。也可以显式开启：
+运行任务时，如果目标仓库存在 `.copilot/memory.md` 或 `.copilot/memory.json`，CLI 会自动启用 Memory v2。`.copilot/memory.json` 是结构化 source of truth，`.copilot/memory.md` 是人类可读索引和兼容入口。也可以显式开启：
 
 ```bash
 copilot-agent run \
@@ -107,6 +108,8 @@ copilot-agent show-run --run run_YYYYMMDD_HHMMSS_xxxxxx --diff --final
 copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx --check
 copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx
 ```
+
+Memory v2 会按当前 task 检索相关 project facts 和 code preferences，只注入少量相关 memory、最近 run、冲突提示和压缩摘要。当前 repository 文件永远优先于 memory。
 
 `apply-run` 会先执行 `git apply --check`，通过后才把保存的 sandbox diff 应用回真实仓库。
 
@@ -133,21 +136,9 @@ COPILOT_WORKER_TEST_CMD=python -m pytest tests
 COPILOT_WORKER_HOST_VERIFY=true
 COPILOT_WORKER_MEMORY_ENABLED=true
 # Optional Docker sandbox defaults.
-COPILOT_DOCKER_IMAGE=copilot-agent-python:latest
+COPILOT_DOCKER_IMAGE=python:3.13-slim
 COPILOT_DOCKER_EXPOSED_PORTS=8000,5173
-COPILOT_DOCKER_NETWORK=none
-COPILOT_DOCKER_MEMORY_LIMIT=1g
-COPILOT_DOCKER_CPUS=2
-COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS=120
 ```
-
-Docker backend 建议先构建项目专用镜像，这样 `network=none` 时也能稳定运行 pytest：
-
-```bash
-docker build -t copilot-agent-python:latest -f docker/copilot-python.Dockerfile .
-```
-
-完整 Docker backend 说明见 [Phase 3 Docker Sandbox Backend](docs/22-phase-three-docker-sandbox-backend.md)。
 
 查看当前 API runtime：
 

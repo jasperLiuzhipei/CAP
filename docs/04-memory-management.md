@@ -187,8 +187,31 @@ Session 配置建议：
 
 - 使用 Agents SDK `SQLiteSession` 或 `SQLAlchemySession` 管理短期会话。
 - 每个 run 结束生成 run summary。
-- 每个 project 保存 `PROJECT_MEMORY.md` 风格的结构化 memory。
+- 每个 project 保存 `.copilot/memory.json` 作为结构化 source of truth，并生成 `.copilot/memory.md` 作为人类可读索引。
 - 实现一个 Memory Curator agent，但写入前先走规则过滤。
 - Memory 读入只注入 top K 条高置信结果。
 - 先不自动记忆用户隐私偏好，改为显式确认后写入。
 
+## 当前 Memory v2 落地
+
+当前本地平台已经实现文件型 Memory v2：
+
+- `project_facts`：项目事实、背景、约束。
+- `code_preferences`：代码和协作偏好。
+- `run_history`：历史 run 摘要、改动文件、验证结果。
+- `conflicts`：同标题 memory 内容变化时保留 old -> new 链路。
+- `compacted_run_summary`：超过保留上限的 run history 会被压缩为摘要。
+
+读路径不再把完整 memory 全量塞进 prompt，而是根据当前 task 做轻量检索：
+
+```python
+load_memory_text(repo, memory_path, query=current_task)
+```
+
+写路径会在 run 完成后写入结构化 `run_history`，并刷新 `memory.md` 索引：
+
+```python
+append_run_memory(report, memory_path)
+```
+
+这一步借鉴了 Claude Code 的几个机制：类型约束、索引和内容分离、检索式召回、陈旧提醒、冲突记录和历史压缩。详细说明见 [Memory v2: Claude Code Inspired Design](23-memory-v2-claude-code-inspired.md)。

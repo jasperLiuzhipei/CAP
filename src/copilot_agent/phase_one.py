@@ -17,7 +17,6 @@ from .memory import append_run_memory, load_memory_text, resolve_memory_path
 from .model_config import DEFAULT_OPENAI_MODEL, ResolvedModelConfig, resolve_model_config
 from .sandbox_backend import (
     DEFAULT_DOCKER_IMAGE,
-    DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS,
     SandboxBackendRunOptions,
     get_sandbox_backend_adapter,
     validate_sandbox_backend,
@@ -66,12 +65,8 @@ class PhaseOneConfig:
     sandbox_backend: str = "unix_local"
     sandbox_runtime_enabled: bool = True
     sandbox_python: str = "python3"
-    sandbox_command_timeout_seconds: float | None = DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS
     docker_image: str = DEFAULT_DOCKER_IMAGE
     docker_exposed_ports: tuple[int, ...] = ()
-    docker_network: str = "bridge"
-    docker_memory_limit: str | None = None
-    docker_cpus: float | None = None
 
 
 @dataclass(frozen=True)
@@ -145,16 +140,8 @@ def validate_config(config: PhaseOneConfig) -> None:
         SandboxBackendRunOptions(
             docker_image=config.docker_image,
             docker_exposed_ports=config.docker_exposed_ports,
-            docker_network=config.docker_network,  # type: ignore[arg-type]
-            docker_memory_limit=config.docker_memory_limit,
-            docker_cpus=config.docker_cpus,
         )
     )
-    if (
-        config.sandbox_command_timeout_seconds is not None
-        and config.sandbox_command_timeout_seconds <= 0
-    ):
-        raise ValueError("Sandbox command timeout must be greater than 0.")
 
 
 def build_phase_one_prompt(config: PhaseOneConfig) -> str:
@@ -217,7 +204,7 @@ def build_phase_one_prompt(config: PhaseOneConfig) -> str:
         )
 
     if config.memory_enabled:
-        memory_text = load_memory_text(config.repo, config.memory_path)
+        memory_text = load_memory_text(config.repo, config.memory_path, query=config.task)
         if memory_text:
             prompt_parts.extend(
                 [
@@ -624,13 +611,8 @@ def _build_agent(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:  # pragma:
     )
 
 
-async def _exec_text(
-    sandbox: Any,
-    command: str,
-    *,
-    timeout: float | None = None,
-) -> CommandResult:  # pragma: no cover
-    result = await sandbox.exec(command, shell=True, timeout=timeout)
+async def _exec_text(sandbox: Any, command: str) -> CommandResult:  # pragma: no cover
+    result = await sandbox.exec(command, shell=True)
     stdout = result.stdout.decode("utf-8", errors="replace")
     stderr = result.stderr.decode("utf-8", errors="replace")
     return CommandResult(
@@ -663,7 +645,6 @@ async def _prepare_sandbox_runtime(
     report.python_check = await _exec_text(
         sandbox,
         _sandbox_python_check_command(config.sandbox_python),
-        timeout=config.sandbox_command_timeout_seconds,
     )
     if report.python_check.exit_code != 0:
         report.notes.append("sandbox Python health check failed")
@@ -673,13 +654,11 @@ async def _prepare_sandbox_runtime(
         report.pytest_check = await _exec_text(
             sandbox,
             _sandbox_pytest_check_command(config.sandbox_python),
-            timeout=config.sandbox_command_timeout_seconds,
         )
         if report.pytest_check.exit_code != 0:
             report.dependency_install = await _install_sandbox_pytest(
                 config.sandbox_python,
                 sandbox,
-                timeout=config.sandbox_command_timeout_seconds,
             )
             if report.dependency_install.exit_code == 0:
                 report.notes.append(f"installed pytest into {SANDBOX_RUNTIME_SITE}")
@@ -705,29 +684,19 @@ def _sandbox_pytest_check_command(python_command: str) -> str:
 async def _install_sandbox_pytest(
     python_command: str,
     sandbox: Any,
-    *,
-    timeout: float | None = None,
 ) -> CommandResult:  # pragma: no cover
     command = (
         f"mkdir -p {shlex.quote(SANDBOX_RUNTIME_SITE)} && "
         f"{shlex.quote(python_command)} -m pip install "
         f"--target {shlex.quote(SANDBOX_RUNTIME_SITE)} pytest"
     )
-    return await _exec_text(sandbox, command, timeout=timeout)
+    return await _exec_text(sandbox, command)
 
 
-async def _ensure_git_baseline(
-    sandbox: Any,
-    *,
-    timeout: float | None = None,
-) -> tuple[bool, str]:  # pragma: no cover
+async def _ensure_git_baseline(sandbox: Any) -> tuple[bool, str]:  # pragma: no cover
     """Ensure `repo/` can produce a diff even when the source folder is not a git repo."""
 
-    check = await _exec_text(
-        sandbox,
-        "git -C repo rev-parse --is-inside-work-tree",
-        timeout=timeout,
-    )
+    check = await _exec_text(sandbox, "git -C repo rev-parse --is-inside-work-tree")
     if check.exit_code == 0:
         return False, check.combined_output
 
@@ -740,7 +709,7 @@ async def _ensure_git_baseline(
             "git -C repo commit -m 'phase-one baseline' --no-gpg-sign",
         ]
     )
-    baseline = await _exec_text(sandbox, init_commands, timeout=timeout)
+    baseline = await _exec_text(sandbox, init_commands)
     return baseline.exit_code == 0, baseline.combined_output
 
 
@@ -789,10 +758,7 @@ async def _read_sandbox_text(sandbox: Any, path: Path) -> str | None:  # pragma:
 
 
 async def _snapshot_sandbox_tree(
-    sandbox: Any,
-    root: str = "repo",
-    *,
-    timeout: float | None = None,
+    sandbox: Any, root: str = "repo"
 ) -> FileSnapshot:  # pragma: no cover
     find = await _exec_text(
         sandbox,
@@ -808,7 +774,6 @@ async def _snapshot_sandbox_tree(
         "! -path '*/.ruff_cache/*' "
         "! -path '*/venv/*' "
         "-size -1000000c",
-        timeout=timeout,
     )
     if find.exit_code != 0:
         return FileSnapshot(files={})
@@ -1065,9 +1030,6 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
     backend_options = SandboxBackendRunOptions(
         docker_image=config.docker_image,
         docker_exposed_ports=config.docker_exposed_ports,
-        docker_network=config.docker_network,  # type: ignore[arg-type]
-        docker_memory_limit=config.docker_memory_limit,
-        docker_cpus=config.docker_cpus,
     )
     sandbox_session = await backend.create_session(
         sdk,
@@ -1083,10 +1045,7 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
             baseline_created, baseline_log = (
                 (False, "skipped git baseline; using snapshot diff for Chat Completions route")
                 if config.model_config.transport == "chat_completions"
-                else await _ensure_git_baseline(
-                    sandbox,
-                    timeout=config.sandbox_command_timeout_seconds,
-                )
+                else await _ensure_git_baseline(sandbox)
             )
             result = await sdk["Runner"].run(
                 agent,
@@ -1099,37 +1058,22 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
                 ),
             )
 
-            after_snapshot = await _snapshot_sandbox_tree(
-                sandbox,
-                timeout=config.sandbox_command_timeout_seconds,
-            )
+            after_snapshot = await _snapshot_sandbox_tree(sandbox)
             snapshot_status, snapshot_diff = _diff_snapshots(before_snapshot, after_snapshot)
 
             if config.model_config.transport == "chat_completions":
                 git_status_text = snapshot_status
                 diff_text = snapshot_diff
             else:
-                git_status = await _exec_text(
-                    sandbox,
-                    "git -C repo status --short",
-                    timeout=config.sandbox_command_timeout_seconds,
-                )
-                diff = await _exec_text(
-                    sandbox,
-                    "git -C repo diff --",
-                    timeout=config.sandbox_command_timeout_seconds,
-                )
+                git_status = await _exec_text(sandbox, "git -C repo status --short")
+                diff = await _exec_text(sandbox, "git -C repo diff --")
                 git_status_text = git_status.combined_output or snapshot_status
                 diff_text = diff.combined_output or snapshot_diff
 
             verification = None
             if config.test_cmd:
                 verification_command = sandbox_runtime.sandbox_test_cmd or config.test_cmd
-                verification = await _exec_text(
-                    sandbox,
-                    f"cd repo && {verification_command}",
-                    timeout=config.sandbox_command_timeout_seconds,
-                )
+                verification = await _exec_text(sandbox, f"cd repo && {verification_command}")
 
             host_verification = None
             if config.test_cmd and config.host_verify:
