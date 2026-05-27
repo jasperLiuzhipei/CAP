@@ -133,9 +133,21 @@ COPILOT_WORKER_TEST_CMD=python -m pytest tests
 COPILOT_WORKER_HOST_VERIFY=true
 COPILOT_WORKER_MEMORY_ENABLED=true
 # Optional Docker sandbox defaults.
-COPILOT_DOCKER_IMAGE=python:3.13-slim
+COPILOT_DOCKER_IMAGE=copilot-agent-python:latest
 COPILOT_DOCKER_EXPOSED_PORTS=8000,5173
+COPILOT_DOCKER_NETWORK=none
+COPILOT_DOCKER_MEMORY_LIMIT=1g
+COPILOT_DOCKER_CPUS=2
+COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS=120
 ```
+
+Docker backend 建议先构建项目专用镜像，这样 `network=none` 时也能稳定运行 pytest：
+
+```bash
+docker build -t copilot-agent-python:latest -f docker/copilot-python.Dockerfile .
+```
+
+完整 Docker backend 说明见 [Phase 3 Docker Sandbox Backend](docs/22-phase-three-docker-sandbox-backend.md)。
 
 查看当前 API runtime：
 

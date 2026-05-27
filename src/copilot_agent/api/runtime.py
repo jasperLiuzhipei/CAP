@@ -10,7 +10,13 @@ from fastapi import FastAPI
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
 from copilot_agent.env import load_dotenv
-from copilot_agent.sandbox_backend import DEFAULT_DOCKER_IMAGE, parse_docker_exposed_ports
+from copilot_agent.sandbox_backend import (
+    DEFAULT_DOCKER_IMAGE,
+    DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS,
+    parse_docker_exposed_ports,
+    parse_optional_float,
+    parse_optional_timeout,
+)
 from copilot_agent.worker import BackgroundRunWorker, RunExecutionOptions, RunWorker
 
 from .app import create_app
@@ -53,9 +59,19 @@ class ApiRuntimeConfig:
                     default=True,
                 ),
                 sandbox_python=source.get("COPILOT_SANDBOX_PYTHON", "python3"),
+                sandbox_command_timeout_seconds=(
+                    parse_optional_timeout(source.get("COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS"))
+                    or DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS
+                ),
                 docker_image=source.get("COPILOT_DOCKER_IMAGE", DEFAULT_DOCKER_IMAGE),
                 docker_exposed_ports=parse_docker_exposed_ports(
                     source.get("COPILOT_DOCKER_EXPOSED_PORTS")
+                ),
+                docker_network=source.get("COPILOT_DOCKER_NETWORK", "bridge"),
+                docker_memory_limit=_env_optional(source, "COPILOT_DOCKER_MEMORY_LIMIT"),
+                docker_cpus=parse_optional_float(
+                    source.get("COPILOT_DOCKER_CPUS"),
+                    name="COPILOT_DOCKER_CPUS",
                 ),
                 require_api_key=_env_bool(source, "COPILOT_WORKER_REQUIRE_API_KEY", default=True),
             ),

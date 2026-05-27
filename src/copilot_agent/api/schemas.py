@@ -18,6 +18,7 @@ from copilot_agent.backend.models import (
 from copilot_agent.backend.service import ToolReview
 from copilot_agent.sandbox_backend import (
     DEFAULT_DOCKER_IMAGE,
+    DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS,
     SandboxBackendSpec,
     parse_docker_exposed_ports,
 )
@@ -69,8 +70,12 @@ class RunExecute(BaseModel):
     host_verify: bool = False
     sandbox_runtime_enabled: bool = True
     sandbox_python: str = "python3"
+    sandbox_command_timeout_seconds: float | None = DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS
     docker_image: str = DEFAULT_DOCKER_IMAGE
     docker_exposed_ports: list[int] = Field(default_factory=list)
+    docker_network: str = "bridge"
+    docker_memory_limit: str | None = None
+    docker_cpus: float | None = None
     require_api_key: bool = True
 
     def to_options(self) -> RunExecutionOptions:
@@ -85,8 +90,12 @@ class RunExecute(BaseModel):
             host_verify=self.host_verify,
             sandbox_runtime_enabled=self.sandbox_runtime_enabled,
             sandbox_python=self.sandbox_python,
+            sandbox_command_timeout_seconds=self.sandbox_command_timeout_seconds,
             docker_image=self.docker_image,
             docker_exposed_ports=docker_exposed_ports,
+            docker_network=self.docker_network,
+            docker_memory_limit=self.docker_memory_limit,
+            docker_cpus=self.docker_cpus,
             require_api_key=self.require_api_key,
         )
 
@@ -114,8 +123,12 @@ class RuntimeConfigResponse(BaseModel):
     worker_require_api_key: bool
     sandbox_runtime_enabled: bool
     sandbox_python: str
+    sandbox_command_timeout_seconds: float | None
     docker_image: str
     docker_exposed_ports: list[int]
+    docker_network: str
+    docker_memory_limit: str | None
+    docker_cpus: float | None
 
     @classmethod
     def from_worker_options(
@@ -137,8 +150,12 @@ class RuntimeConfigResponse(BaseModel):
             worker_require_api_key=options.require_api_key,
             sandbox_runtime_enabled=options.sandbox_runtime_enabled,
             sandbox_python=options.sandbox_python,
+            sandbox_command_timeout_seconds=options.sandbox_command_timeout_seconds,
             docker_image=options.docker_image,
             docker_exposed_ports=list(options.docker_exposed_ports),
+            docker_network=options.docker_network,
+            docker_memory_limit=options.docker_memory_limit,
+            docker_cpus=options.docker_cpus,
         )
 
 

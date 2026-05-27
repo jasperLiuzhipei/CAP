@@ -76,8 +76,12 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
                 output_dir=tmp_path / "runs",
                 sandbox_python="python3.13",
                 sandbox_runtime_enabled=False,
+                sandbox_command_timeout_seconds=45,
                 docker_image="copilot-python:latest",
                 docker_exposed_ports=(8000,),
+                docker_network="none",
+                docker_memory_limit="512m",
+                docker_cpus=1.5,
                 require_api_key=False,
             ),
         )
@@ -108,8 +112,12 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
     assert config.test_cmd == "pytest tests"
     assert not config.sandbox_runtime_enabled
     assert config.sandbox_python == "python3.13"
+    assert config.sandbox_command_timeout_seconds == 45
     assert config.docker_image == "copilot-python:latest"
     assert config.docker_exposed_ports == (8000,)
+    assert config.docker_network == "none"
+    assert config.docker_memory_limit == "512m"
+    assert config.docker_cpus == 1.5
     assert config.memory_enabled
     assert config.memory_path == Path(project.memory_path)
 

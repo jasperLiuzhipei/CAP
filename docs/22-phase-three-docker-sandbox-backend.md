@@ -15,9 +15,16 @@
 - `SandboxBackendRunOptions`
 - `COPILOT_DOCKER_IMAGE`
 - `COPILOT_DOCKER_EXPOSED_PORTS`
+- `COPILOT_DOCKER_NETWORK`
+- `COPILOT_DOCKER_MEMORY_LIMIT`
+- `COPILOT_DOCKER_CPUS`
+- `COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS`
 - CLI 参数 `--docker-image`
 - CLI 参数 `--docker-exposed-port`
-- API worker runtime config 中的 Docker image 和 exposed ports
+- CLI 参数 `--docker-network`
+- CLI 参数 `--docker-memory-limit`
+- CLI 参数 `--docker-cpus`
+- API worker runtime config 中的 Docker image、network、resource limits 和 exposed ports
 
 当前执行路径：
 
@@ -53,9 +60,22 @@ CLI / API worker
 `.env` 示例：
 
 ```env
-COPILOT_DOCKER_IMAGE=python:3.13-slim
+COPILOT_DOCKER_IMAGE=copilot-agent-python:latest
 COPILOT_DOCKER_EXPOSED_PORTS=8000,5173
+COPILOT_DOCKER_NETWORK=none
+COPILOT_DOCKER_MEMORY_LIMIT=1g
+COPILOT_DOCKER_CPUS=2
+COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS=120
 ```
+
+构建项目专用镜像：
+
+```bash
+docker build -t copilot-agent-python:latest -f docker/copilot-python.Dockerfile .
+```
+
+这个 Dockerfile 使用 BuildKit pip cache mount。第一次构建会下载依赖，后续构建会复用缓存和
+Docker layer，适合作为项目依赖缓存的第一版。
 
 CLI 示例：
 
@@ -66,7 +86,10 @@ PYTHONPATH=src .venv/bin/python -m copilot_agent run \
   --test-cmd "python -m pytest tests" \
   --provider deepseek \
   --sandbox-backend docker \
-  --docker-image python:3.13-slim
+  --docker-image copilot-agent-python:latest \
+  --docker-network none \
+  --docker-memory-limit 1g \
+  --docker-cpus 2
 ```
 
 API 创建 run 时选择 Docker：
@@ -81,21 +104,50 @@ curl -X POST http://127.0.0.1:8000/api/v1/runs \
   }'
 ```
 
-后台 worker 会使用 `.env` 中的 Docker defaults。
+后台 worker 会使用 `.env` 中的 Docker defaults。Web UI 里选择 `docker` backend 后，
+run record 会记录 `sandbox_backend=docker`，worker 再读取上述 runtime defaults 来执行。
+
+## Smoke Test
+
+真实 Docker smoke test 默认不跑，避免没有 Docker 的环境失败。需要时显式开启：
+
+```bash
+COPILOT_RUN_DOCKER_SMOKE=1 \
+COPILOT_DOCKER_IMAGE=copilot-agent-python:latest \
+COPILOT_DOCKER_NETWORK=none \
+COPILOT_DOCKER_MEMORY_LIMIT=1g \
+COPILOT_DOCKER_CPUS=2 \
+COPILOT_DOCKER_SMOKE_COMMAND="python -m pytest tests" \
+.venv/bin/python -m pytest tests/test_docker_smoke.py
+```
+
+也可以直接运行脚本：
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/smoke_docker_backend.py \
+  --repo examples/sample_repo \
+  --image copilot-agent-python:latest \
+  --network none \
+  --memory-limit 1g \
+  --cpus 2 \
+  --command "python -m pytest tests"
+```
 
 ## 当前边界
 
 - 需要本机 Docker Desktop 或 Docker daemon 已运行。
 - 默认镜像 `python:3.13-slim` 适合 Python 小项目，但不一定包含 git、node、系统包或项目依赖。
-- Docker backend 当前还没有 CPU、内存、网络、超时等生产级策略。
-- 真实 Docker smoke test 需要本机 Docker 环境，因此当前单元测试用 fake SDK client 验证 adapter contract。
+- CPU、内存和网络策略现在是平台层注入到 Docker SDK `containers.create()` 的参数。
+- `COPILOT_DOCKER_NETWORK=none` 会禁用容器网络，适合使用预构建镜像的更安全运行。
+- 平台自有的 runtime check、verification、git diff 等命令现在受 sandbox command timeout 控制。
+- Agent 自己通过 SDK shell tool 发起的命令仍由 OpenAI Agents SDK 的 tool/runtime 行为控制。
+- 项目专用 Dockerfile 已预装 pytest，并通过 BuildKit pip cache 降低重复构建成本。
 
 ## 下一步
 
 建议继续做：
 
-1. 提供项目专用 Copilot Dockerfile。
-2. 增加 Docker smoke test，环境不可用时自动 skip。
-3. 增加资源限制和网络策略。
-4. 增加依赖缓存或预构建镜像。
-5. 在 UI 中展示 Docker image 与运行环境提示。
+1. 在 UI 中展示 Docker image、network 和 resource defaults。
+2. 增加依赖缓存或多语言预构建镜像。
+3. 增加 run-level resource policy。
+4. 增加 CI 中可选 Docker smoke job。
