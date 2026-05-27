@@ -110,9 +110,4 @@ queued run orchestration + result persistence
 
 ## 下一步
 
-建议第四块做 event stream / run timeline：
-
-1. 定义 `RunEvent` 数据模型。
-2. Worker 在状态变化时写入 event。
-3. API 提供 `GET /api/v1/runs/{run_id}/events`。
-4. 后续前端就能展示 agent timeline、tool calls、approval 和 artifacts。
+第四块已实现 event stream / run timeline。下一步建议做真正的后台异步 worker 和实时 SSE 推送。

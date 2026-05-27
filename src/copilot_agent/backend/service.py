@@ -8,7 +8,16 @@ from uuid import uuid4
 
 from copilot_agent.phase_one import PhaseOneReport
 
-from .models import Approval, Artifact, Project, RunRecord, RunStatus, ToolCall
+from .models import (
+    Approval,
+    Artifact,
+    Project,
+    RunEvent,
+    RunEventType,
+    RunRecord,
+    RunStatus,
+    ToolCall,
+)
 from .policy import ToolDecision, ToolPolicyEngine
 from .store import SQLiteBackendStore
 
@@ -88,7 +97,7 @@ class CopilotBackendService:
         if not task.strip():
             raise ValueError("Run task must not be empty.")
 
-        return self.store.create_run(
+        run = self.store.create_run(
             RunRecord(
                 id=_new_id("run"),
                 project_id=project_id,
@@ -100,6 +109,18 @@ class CopilotBackendService:
                 sandbox_backend=sandbox_backend,
             )
         )
+        self.record_event(
+            run.id,
+            "run.queued",
+            {
+                "project_id": project_id,
+                "model_provider": model_provider,
+                "model": model,
+                "tool_strategy": tool_strategy,
+                "sandbox_backend": sandbox_backend,
+            },
+        )
+        return run
 
     def get_run(self, run_id: str) -> RunRecord:
         run = self.store.get_run(run_id)
@@ -113,7 +134,9 @@ class CopilotBackendService:
         return self.store.list_runs(project_id)
 
     def start_run(self, run_id: str) -> RunRecord:
-        return self.store.update_run_status(run_id, "running")
+        run = self.store.update_run_status(run_id, "running")
+        self.record_event(run.id, "run.started", {"status": run.status})
+        return run
 
     def finish_run(
         self,
@@ -124,13 +147,24 @@ class CopilotBackendService:
         saved_dir: str | Path | None = None,
         diff_path: str | Path | None = None,
     ) -> RunRecord:
-        return self.store.update_run_status(
+        run = self.store.update_run_status(
             run_id,
             status,
             summary=summary,
             saved_dir=str(saved_dir) if saved_dir else None,
             diff_path=str(diff_path) if diff_path else None,
         )
+        self.record_event(
+            run.id,
+            _event_type_for_status(status),
+            {
+                "status": status,
+                "saved_dir": run.saved_dir,
+                "diff_path": run.diff_path,
+                "summary": run.summary,
+            },
+        )
+        return run
 
     def record_tool_decision(
         self,
@@ -174,8 +208,29 @@ class CopilotBackendService:
                 approval_id=approval.id if approval else None,
             )
         )
+        self.record_event(
+            run_id,
+            "tool.reviewed",
+            {
+                "tool_call_id": tool_call.id,
+                "tool_name": tool_name,
+                "action": decision.action,
+                "risk": decision.risk,
+                "approval_id": approval.id if approval else None,
+            },
+        )
         if approval is not None:
             self.store.update_run_status(run_id, "needs_approval")
+            self.record_event(
+                run_id,
+                "approval.required",
+                {
+                    "approval_id": approval.id,
+                    "tool_name": tool_name,
+                    "risk": decision.risk,
+                },
+            )
+            self.record_event(run_id, "run.needs_approval", {"status": "needs_approval"})
         return ToolReview(decision=decision, tool_call=tool_call, approval=approval)
 
     def list_tool_calls(self, run_id: str) -> list[ToolCall]:
@@ -190,11 +245,21 @@ class CopilotBackendService:
         decided_by: str,
     ) -> Approval:
         decision = "approved" if approved else "rejected"
-        return self.store.decide_approval(
+        approval = self.store.decide_approval(
             approval_id,
             decision,
             decided_by=decided_by,
         )
+        self.record_event(
+            approval.run_id,
+            "approval.decided",
+            {
+                "approval_id": approval.id,
+                "decision": approval.decision,
+                "decided_by": approval.decided_by,
+            },
+        )
+        return approval
 
     def list_approvals(self, run_id: str) -> list[Approval]:
         self.get_run(run_id)
@@ -203,6 +268,25 @@ class CopilotBackendService:
     def list_artifacts(self, run_id: str) -> list[Artifact]:
         self.get_run(run_id)
         return self.store.list_artifacts(run_id)
+
+    def list_events(self, run_id: str) -> list[RunEvent]:
+        self.get_run(run_id)
+        return self.store.list_events(run_id)
+
+    def record_event(
+        self,
+        run_id: str,
+        event_type: RunEventType,
+        payload: dict[str, Any] | None = None,
+    ) -> RunEvent:
+        return self.store.create_event(
+            RunEvent(
+                id=_new_id("evt"),
+                run_id=run_id,
+                event_type=event_type,
+                payload=payload or {},
+            )
+        )
 
     def ingest_phase_one_report(
         self,
@@ -243,6 +327,17 @@ class CopilotBackendService:
                 saved_dir=report.saved_dir,
                 diff_path=str(diff_path) if diff_path else None,
             )
+        self.record_event(
+            run.id,
+            _event_type_for_status(status),
+            {
+                "status": status,
+                "saved_dir": run.saved_dir,
+                "diff_path": run.diff_path,
+                "summary": run.summary,
+                "source_run_id": report.run_id,
+            },
+        )
 
         if report.saved_dir:
             self._record_report_artifacts(run.id, Path(report.saved_dir), report)
@@ -263,7 +358,7 @@ class CopilotBackendService:
         ]
         for kind, path, metadata in candidates:
             if path.exists():
-                self.store.create_artifact(
+                artifact = self.store.create_artifact(
                     Artifact(
                         id=_new_id("art"),
                         run_id=run_id,
@@ -271,6 +366,15 @@ class CopilotBackendService:
                         path=str(path),
                         metadata=metadata,
                     )
+                )
+                self.record_event(
+                    run_id,
+                    "artifact.created",
+                    {
+                        "artifact_id": artifact.id,
+                        "kind": artifact.kind,
+                        "path": artifact.path,
+                    },
                 )
 
 
@@ -298,6 +402,14 @@ def _status_from_report(report: PhaseOneReport) -> RunStatus:
     if report.verification is not None:
         return "succeeded" if report.verification.exit_code == 0 else "failed"
     return "succeeded"
+
+
+def _event_type_for_status(status: RunStatus) -> RunEventType:
+    if status == "succeeded":
+        return "run.completed"
+    if status == "running":
+        return "run.started"
+    return f"run.{status}"
 
 
 def _new_id(prefix: str) -> str:

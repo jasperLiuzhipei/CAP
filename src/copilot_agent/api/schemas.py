@@ -10,6 +10,7 @@ from copilot_agent.backend.models import (
     ApprovalDecision,
     Artifact,
     Project,
+    RunEvent,
     RunRecord,
     RunStatus,
     ToolCall,
@@ -171,6 +172,18 @@ class ArtifactResponse(BaseModel):
     @classmethod
     def from_domain(cls, artifact: Artifact) -> ArtifactResponse:
         return cls(**artifact.__dict__)
+
+
+class RunEventResponse(BaseModel):
+    id: str
+    run_id: str
+    event_type: str
+    payload: dict[str, Any]
+    created_at: str
+
+    @classmethod
+    def from_domain(cls, event: RunEvent) -> RunEventResponse:
+        return cls(**event.__dict__)
 
 
 class DiffResponse(BaseModel):

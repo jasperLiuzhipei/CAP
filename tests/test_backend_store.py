@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from copilot_agent.backend.models import Approval, Artifact, Project, RunRecord, ToolCall
+from copilot_agent.backend.models import Approval, Artifact, Project, RunEvent, RunRecord, ToolCall
 from copilot_agent.backend.store import SQLiteBackendStore
 
 
@@ -61,6 +61,22 @@ def test_sqlite_store_round_trips_control_plane_records(tmp_path) -> None:
             metadata={"changed": True},
         )
     )
+    queued_event = store.create_event(
+        RunEvent(
+            id="evt_1",
+            run_id=run.id,
+            event_type="run.queued",
+            payload={"task": run.task},
+        )
+    )
+    completed_event = store.create_event(
+        RunEvent(
+            id="evt_2",
+            run_id=run.id,
+            event_type="run.completed",
+            payload={"summary": "done"},
+        )
+    )
 
     updated_run = store.update_run_status(
         run.id,
@@ -84,6 +100,7 @@ def test_sqlite_store_round_trips_control_plane_records(tmp_path) -> None:
     assert completed_tool.status == "completed"
     assert store.list_tool_calls(run.id) == [completed_tool]
     assert store.list_artifacts(run.id) == [artifact]
+    assert store.list_events(run.id) == [queued_event, completed_event]
 
 
 def test_sqlite_store_missing_records_raise_clear_errors(tmp_path) -> None:

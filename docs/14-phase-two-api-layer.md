@@ -49,6 +49,8 @@ GET /api/v1/runs/{run_id}
 POST /api/v1/runs/{run_id}/start
 POST /api/v1/runs/{run_id}/finish
 POST /api/v1/runs/{run_id}/execute
+GET /api/v1/runs/{run_id}/events
+GET /api/v1/runs/{run_id}/events/stream
 GET /api/v1/runs/{run_id}/diff
 ```
 

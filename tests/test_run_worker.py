@@ -84,6 +84,15 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
     assert service.store.get_run("sdk_generated_run") is None
     assert service.get_run(run.id).summary == "fixed"
     assert len(service.list_artifacts(run.id)) == 4
+    assert [event.event_type for event in service.list_events(run.id)] == [
+        "run.queued",
+        "run.started",
+        "run.completed",
+        "artifact.created",
+        "artifact.created",
+        "artifact.created",
+        "artifact.created",
+    ]
 
     config = captured_configs[0]
     assert config.repo == Path(project.repo_path)
@@ -142,6 +151,11 @@ def test_run_worker_marks_run_failed_when_runner_raises(tmp_path: Path) -> None:
 
     assert result.status == "failed"
     assert "model unavailable" in result.summary
+    assert [event.event_type for event in service.list_events(run.id)] == [
+        "run.queued",
+        "run.started",
+        "run.failed",
+    ]
 
 
 def test_run_worker_rejects_non_queued_run(tmp_path: Path) -> None:
