@@ -189,6 +189,25 @@ def test_validate_config_errors(tmp_path: Path) -> None:
                 docker_exposed_ports=(70000,),
             )
         )
+    with pytest.raises(ValueError, match="Sandbox command timeout"):
+        validate_config(
+            PhaseOneConfig(
+                repo=repo,
+                task="ok",
+                model_config=model_config,
+                sandbox_command_timeout_seconds=0,
+            )
+        )
+    with pytest.raises(ValueError, match="Docker network"):
+        validate_config(
+            PhaseOneConfig(
+                repo=repo,
+                task="ok",
+                model_config=model_config,
+                sandbox_backend="docker",
+                docker_network="space",
+            )
+        )
 
 
 def test_build_prompt_for_strategies_and_memory(tmp_path: Path) -> None:

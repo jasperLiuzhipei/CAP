@@ -18,7 +18,14 @@ from .phase_one import (
     validate_config,
 )
 from .runs import apply_run_patch, list_runs, load_report, read_run_text, resolve_run_dir
-from .sandbox_backend import DEFAULT_DOCKER_IMAGE, SANDBOX_BACKENDS, parse_docker_exposed_ports
+from .sandbox_backend import (
+    DEFAULT_DOCKER_IMAGE,
+    DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS,
+    SANDBOX_BACKENDS,
+    parse_docker_exposed_ports,
+    parse_optional_float,
+    parse_optional_timeout,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -124,6 +131,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Expose a container port on localhost for Docker sandbox runs. Repeatable.",
     )
     run.add_argument(
+        "--docker-network",
+        default=None,
+        choices=("bridge", "none", "host"),
+        help="Docker network mode. Defaults to COPILOT_DOCKER_NETWORK or bridge.",
+    )
+    run.add_argument(
+        "--docker-memory-limit",
+        default=None,
+        help="Docker memory limit such as 512m or 1g. Defaults to COPILOT_DOCKER_MEMORY_LIMIT.",
+    )
+    run.add_argument(
+        "--docker-cpus",
+        default=None,
+        type=float,
+        help="Docker CPU limit, e.g. 1.0 or 2.5. Defaults to COPILOT_DOCKER_CPUS.",
+    )
+    run.add_argument(
         "--sandbox-python",
         default="python3",
         help="Python command to use inside the sandbox after runtime provisioning.",
@@ -132,6 +156,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-sandbox-runtime",
         action="store_true",
         help="Disable sandbox Python runtime grants and verification command normalization.",
+    )
+    run.add_argument(
+        "--sandbox-command-timeout-seconds",
+        default=None,
+        type=float,
+        help=(
+            "Timeout for platform-owned sandbox commands. Defaults to "
+            "COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS or "
+            f"{DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS:g}."
+        ),
     )
     run.add_argument("--max-turns", default=32, type=int, help="Maximum agent turns.")
     run.add_argument(
@@ -198,6 +232,19 @@ def _config_from_args(
 ) -> PhaseOneConfig:
     env_ports = parse_docker_exposed_ports(os.getenv("COPILOT_DOCKER_EXPOSED_PORTS"))
     docker_exposed_ports = tuple(dict.fromkeys([*env_ports, *args.docker_exposed_port]))
+    docker_cpus = (
+        args.docker_cpus
+        if args.docker_cpus is not None
+        else parse_optional_float(os.getenv("COPILOT_DOCKER_CPUS"), name="COPILOT_DOCKER_CPUS")
+    )
+    sandbox_command_timeout_seconds = (
+        args.sandbox_command_timeout_seconds
+        if args.sandbox_command_timeout_seconds is not None
+        else (
+            parse_optional_timeout(os.getenv("COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS"))
+            or DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS
+        )
+    )
     return PhaseOneConfig(
         repo=args.repo.resolve(),
         task=args.task,
@@ -217,10 +264,14 @@ def _config_from_args(
         sandbox_backend=args.sandbox_backend,
         sandbox_runtime_enabled=not args.no_sandbox_runtime,
         sandbox_python=args.sandbox_python,
+        sandbox_command_timeout_seconds=sandbox_command_timeout_seconds,
         docker_image=args.docker_image
         or os.getenv("COPILOT_DOCKER_IMAGE")
         or DEFAULT_DOCKER_IMAGE,
         docker_exposed_ports=docker_exposed_ports,
+        docker_network=args.docker_network or os.getenv("COPILOT_DOCKER_NETWORK") or "bridge",
+        docker_memory_limit=args.docker_memory_limit or os.getenv("COPILOT_DOCKER_MEMORY_LIMIT"),
+        docker_cpus=docker_cpus,
     )
 
 
@@ -247,10 +298,21 @@ async def _run(args: argparse.Namespace) -> int:
             "enabled" if config.sandbox_runtime_enabled else "disabled",
             f"({config.sandbox_python})",
         )
+        print(
+            "Sandbox command timeout:",
+            (
+                f"{config.sandbox_command_timeout_seconds:g}s"
+                if config.sandbox_command_timeout_seconds is not None
+                else "disabled"
+            ),
+        )
         print("Sandbox backend:", config.sandbox_backend)
         if config.sandbox_backend == "docker":
             print("Docker image:", config.docker_image)
             print("Docker exposed ports:", config.docker_exposed_ports or "none")
+            print("Docker network:", config.docker_network)
+            print("Docker memory limit:", config.docker_memory_limit or "default")
+            print("Docker CPUs:", config.docker_cpus or "default")
         print()
         print("Generated agent prompt:\n")
         print(build_phase_one_prompt(config))

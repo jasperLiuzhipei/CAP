@@ -13,6 +13,7 @@ from copilot_agent.sandbox_backend import (
     SandboxBackendRunOptions,
     UnixLocalSandboxBackend,
     _resolve_docker_sdk,
+    docker_create_kwargs,
     get_sandbox_backend,
     get_sandbox_backend_adapter,
     list_sandbox_backends,
@@ -57,8 +58,20 @@ class FakeUnixLocalSandboxClient:
         self.deleted_sandbox = sandbox
 
 
+class FakeDockerContainers:
+    def __init__(self) -> None:
+        self.create_kwargs: dict[str, object] | None = None
+
+    def create(self, **kwargs: object) -> object:
+        self.create_kwargs = kwargs
+        return object()
+
+
 class FakeDockerSDKClient:
-    pass
+    def __init__(self) -> None:
+        self.containers = FakeDockerContainers()
+        self.images = object()
+        self.volumes = object()
 
 
 class FakeDockerSandboxClientOptions:
@@ -77,6 +90,7 @@ class FakeDockerSandboxClient:
         self.docker_client = docker_client
         self.created_manifest: object | None = None
         self.created_options: FakeDockerSandboxClientOptions | None = None
+        self.created_container: object | None = None
         self.deleted_sandbox: object | None = None
 
     async def create(
@@ -87,6 +101,7 @@ class FakeDockerSandboxClient:
     ) -> object:
         self.created_manifest = manifest
         self.created_options = options
+        self.created_container = self.docker_client.containers.create(image=options.image)
         return {"manifest": manifest, "image": options.image}
 
     async def delete(self, sandbox: object) -> None:
@@ -188,17 +203,27 @@ def test_docker_backend_owns_session_lifecycle(tmp_path: Path) -> None:
             options=SandboxBackendRunOptions(
                 docker_image="copilot-test:latest",
                 docker_exposed_ports=(8000, 5173),
+                docker_network="none",
+                docker_memory_limit="512m",
+                docker_cpus=1.5,
             ),
         )
         await backend.delete_session(handle)
 
         assert handle.backend_id == "docker"
         assert isinstance(handle.client, FakeDockerSandboxClient)
-        assert isinstance(handle.client.docker_client, FakeDockerSDKClient)
+        assert handle.client.docker_client.images is not None
         assert handle.client.created_manifest is manifest
         assert handle.client.created_options is not None
         assert handle.client.created_options.image == "copilot-test:latest"
         assert handle.client.created_options.exposed_ports == (8000, 5173)
+        inner_containers = handle.client.docker_client.containers._containers
+        assert inner_containers.create_kwargs == {
+            "image": "copilot-test:latest",
+            "network_mode": "none",
+            "mem_limit": "512m",
+            "nano_cpus": 1_500_000_000,
+        }
         assert handle.sandbox == {"manifest": manifest, "image": "copilot-test:latest"}
         assert handle.client.deleted_sandbox == handle.sandbox
 
@@ -234,6 +259,21 @@ def test_docker_backend_defaults_and_port_parsing() -> None:
         parse_docker_exposed_ports("70000")
 
 
+def test_docker_create_kwargs_for_resource_limits() -> None:
+    assert docker_create_kwargs(SandboxBackendRunOptions()) == {}
+    assert docker_create_kwargs(
+        SandboxBackendRunOptions(
+            docker_network="none",
+            docker_memory_limit="1g",
+            docker_cpus=2.5,
+        )
+    ) == {
+        "network_mode": "none",
+        "mem_limit": "1g",
+        "nano_cpus": 2_500_000_000,
+    }
+
+
 def test_docker_backend_missing_dependency_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -259,3 +299,13 @@ def test_sandbox_backend_run_options_validation() -> None:
         validate_sandbox_backend_run_options(
             SandboxBackendRunOptions(docker_exposed_ports=(0,))
         )
+    with pytest.raises(ValueError, match="Docker network"):
+        validate_sandbox_backend_run_options(
+            SandboxBackendRunOptions(docker_network="space")  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="Docker memory"):
+        validate_sandbox_backend_run_options(
+            SandboxBackendRunOptions(docker_memory_limit=" ")
+        )
+    with pytest.raises(ValueError, match="CPU"):
+        validate_sandbox_backend_run_options(SandboxBackendRunOptions(docker_cpus=0))
