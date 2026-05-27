@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from .memory import append_run_memory, load_memory_text, resolve_memory_path
 from .model_config import DEFAULT_OPENAI_MODEL, ResolvedModelConfig, resolve_model_config
-from .sandbox_backend import validate_sandbox_backend
+from .sandbox_backend import get_sandbox_backend_adapter, validate_sandbox_backend
 
 DEFAULT_MODEL = DEFAULT_OPENAI_MODEL
 DEFAULT_WORKFLOW_NAME = "Copilot phase-one local coding task"
@@ -560,17 +560,17 @@ def _unique_strings(values: list[str]) -> list[str]:
     return unique
 
 
-def _build_agent(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:  # pragma: no cover
-    runtime_grants = [
-        sdk["SandboxPathGrant"](path=path, read_only=True)
-        for path in _sandbox_runtime_grant_paths(config)
-    ]
-    manifest = sdk["Manifest"](
-        entries={
-            "repo": sdk["LocalDir"](src=config.repo),
-        },
-        extra_path_grants=tuple(runtime_grants),
+def _build_sandbox_manifest(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:  # pragma: no cover
+    backend = get_sandbox_backend_adapter(config.sandbox_backend)
+    return backend.build_manifest(
+        sdk,
+        repo=config.repo,
+        runtime_grant_paths=_sandbox_runtime_grant_paths(config),
     )
+
+
+def _build_agent(config: PhaseOneConfig, sdk: dict[str, Any]) -> Any:  # pragma: no cover
+    manifest = _build_sandbox_manifest(config, sdk)
 
     if config.model_config.transport == "chat_completions":
         capabilities = [
@@ -1010,10 +1010,11 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
     sdk = _load_agents_sdk()
     sdk["set_tracing_disabled"](config.model_config.tracing_disabled)
     prompt = build_phase_one_prompt(config)
+    backend = get_sandbox_backend_adapter(config.sandbox_backend)
     agent = _build_agent(config, sdk)
     before_snapshot = _snapshot_local_tree(config.repo)
-    client = sdk["UnixLocalSandboxClient"]()
-    sandbox = await client.create(manifest=agent.default_manifest)
+    sandbox_session = await backend.create_session(sdk, manifest=agent.default_manifest)
+    sandbox = sandbox_session.sandbox
     run_id = datetime.now(UTC).strftime("run_%Y%m%d_%H%M%S_%f")
 
     try:
@@ -1088,7 +1089,7 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
                 host_verification=host_verification,
             )
     finally:
-        await client.delete(sandbox)
+        await backend.delete_session(sandbox_session)
 
     if config.save:
         save_report(report, config.output_dir)
