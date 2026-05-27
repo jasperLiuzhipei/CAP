@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from copilot_agent.backend.models import Artifact, RunEvent
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
+from copilot_agent.model_config import resolve_model_config
 from copilot_agent.worker import BackgroundRunWorker, RunWorker
 
 from .schemas import (
@@ -27,6 +28,7 @@ from .schemas import (
     RunExecute,
     RunFinish,
     RunResponse,
+    RuntimeConfigResponse,
     ToolCallResponse,
     ToolReviewCreate,
     ToolReviewResponse,
@@ -43,6 +45,7 @@ def create_app(
     worker: RunWorker | None = None,
     background_worker: BackgroundRunWorker | None = None,
     auto_start_background_worker: bool = False,
+    runtime_config: dict[str, object] | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for the Copilot control plane."""
 
@@ -61,6 +64,10 @@ def create_app(
     app.state.copilot_background_worker = (
         background_worker or BackgroundRunWorker(resolved_worker)
     )
+    app.state.copilot_runtime_config = runtime_config or {
+        "db_path": str(db_path),
+        "auto_start_background_worker": auto_start_background_worker,
+    }
 
     app.include_router(_build_router())
     return app
@@ -112,6 +119,17 @@ def _build_router():
     @router.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @router.get("/runtime/config", response_model=RuntimeConfigResponse)
+    def get_runtime_config(
+        request: Request,
+        background_worker: BackgroundRunWorker = BACKGROUND_WORKER_DEPENDENCY,
+    ) -> RuntimeConfigResponse:
+        runtime_config = getattr(request.app.state, "copilot_runtime_config", {})
+        return RuntimeConfigResponse.from_worker_options(
+            runtime_config=dict(runtime_config),
+            options=background_worker.default_options,
+        )
 
     @router.post(
         "/projects",
@@ -167,12 +185,19 @@ def _build_router():
         background_worker: BackgroundRunWorker = BACKGROUND_WORKER_DEPENDENCY,
     ) -> RunResponse:
         try:
+            project = service.get_project(payload.project_id)
+            model_config = resolve_model_config(
+                provider=payload.model_provider or project.default_model_provider,
+                model=payload.model,
+                tool_strategy=payload.tool_strategy,
+                require_api_key=False,
+            )
             run = service.queue_run(
                 project_id=payload.project_id,
                 task=payload.task,
-                model_provider=payload.model_provider,
-                model=payload.model,
-                tool_strategy=payload.tool_strategy,
+                model_provider=model_config.provider,
+                model=model_config.model,
+                tool_strategy=model_config.tool_strategy,
                 sandbox_backend=payload.sandbox_backend,
             )
         except ValueError as exc:

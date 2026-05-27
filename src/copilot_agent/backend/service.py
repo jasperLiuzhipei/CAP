@@ -310,23 +310,26 @@ class CopilotBackendService:
                     id=target_run_id,
                     project_id=project_id,
                     task=report.task,
-                    status=status,
+                    status="running",
                     model_provider=report.model_provider,
                     model=report.model,
                     tool_strategy=report.tool_strategy,
-                    saved_dir=report.saved_dir,
-                    diff_path=str(diff_path) if diff_path else None,
-                    summary=report.final_output,
                 )
             )
         else:
-            run = self.store.update_run_status(
-                existing.id,
-                status,
-                summary=report.final_output,
-                saved_dir=report.saved_dir,
-                diff_path=str(diff_path) if diff_path else None,
-            )
+            run = existing
+        self._record_report_runtime_events(run.id, report)
+
+        if report.saved_dir:
+            self._record_report_artifacts(run.id, Path(report.saved_dir), report)
+
+        run = self.store.update_run_status(
+            run.id,
+            status,
+            summary=report.final_output,
+            saved_dir=report.saved_dir,
+            diff_path=str(diff_path) if diff_path else None,
+        )
         self.record_event(
             run.id,
             _event_type_for_status(status),
@@ -338,10 +341,47 @@ class CopilotBackendService:
                 "source_run_id": report.run_id,
             },
         )
-
-        if report.saved_dir:
-            self._record_report_artifacts(run.id, Path(report.saved_dir), report)
         return run
+
+    def _record_report_runtime_events(self, run_id: str, report: PhaseOneReport) -> None:
+        if report.sandbox_runtime is not None:
+            runtime = report.sandbox_runtime
+            self.record_event(
+                run_id,
+                "sandbox.runtime_checked",
+                {
+                    "enabled": runtime.enabled,
+                    "python_command": runtime.python_command,
+                    "sandbox_test_cmd": runtime.sandbox_test_cmd,
+                    "python_check_exit_code": (
+                        runtime.python_check.exit_code if runtime.python_check else None
+                    ),
+                    "pytest_check_exit_code": (
+                        runtime.pytest_check.exit_code if runtime.pytest_check else None
+                    ),
+                    "dependency_install_exit_code": (
+                        runtime.dependency_install.exit_code
+                        if runtime.dependency_install
+                        else None
+                    ),
+                    "notes": runtime.notes,
+                },
+            )
+        for kind, result in (
+            ("sandbox", report.verification),
+            ("host", report.host_verification),
+        ):
+            if result is None:
+                continue
+            self.record_event(
+                run_id,
+                "verification.completed",
+                {
+                    "kind": kind,
+                    "command": result.command,
+                    "exit_code": result.exit_code,
+                },
+            )
 
     def _record_report_artifacts(
         self,
@@ -353,6 +393,7 @@ class CopilotBackendService:
             ("report", saved_dir / "report.json", {}),
             ("summary", saved_dir / "final.md", {}),
             ("diff", saved_dir / "diff.patch", {"changed": bool(report.diff.strip())}),
+            ("log", saved_dir / "sandbox_runtime.log", {"kind": "sandbox_runtime"}),
             ("log", saved_dir / "verification.log", {"kind": "sandbox_verification"}),
             ("log", saved_dir / "host_verification.log", {"kind": "host_verification"}),
         ]

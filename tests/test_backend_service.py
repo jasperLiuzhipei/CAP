@@ -6,7 +6,7 @@ import pytest
 
 from copilot_agent.backend.service import CopilotBackendService, redact_secrets
 from copilot_agent.backend.store import SQLiteBackendStore
-from copilot_agent.phase_one import CommandResult, PhaseOneReport
+from copilot_agent.phase_one import CommandResult, PhaseOneReport, SandboxRuntimeReport
 
 
 def build_service(tmp_path: Path) -> CopilotBackendService:
@@ -103,6 +103,7 @@ def test_backend_service_ingests_phase_one_report_artifacts(tmp_path: Path) -> N
         "report.json",
         "final.md",
         "diff.patch",
+        "sandbox_runtime.log",
         "verification.log",
         "host_verification.log",
     ):
@@ -120,6 +121,14 @@ def test_backend_service_ingests_phase_one_report_artifacts(tmp_path: Path) -> N
         prompt="prompt",
         final_output="fixed",
         diff="--- repo/a.py\n+++ repo/a.py\n",
+        sandbox_runtime=SandboxRuntimeReport(
+            enabled=True,
+            python_command="python3",
+            original_test_cmd="python -m pytest tests",
+            sandbox_test_cmd="PYTEST_ADDOPTS='-p no:debugging' python -m pytest tests",
+            python_check=CommandResult("python3 -c check", 0, "ok", ""),
+            notes=["runtime ok"],
+        ),
         verification=CommandResult("pytest", 1, "", "sandbox failed"),
         host_verification=CommandResult("pytest", 0, "host passed", ""),
         saved_dir=str(saved_dir),
@@ -131,10 +140,22 @@ def test_backend_service_ingests_phase_one_report_artifacts(tmp_path: Path) -> N
 
     assert run.status == "succeeded"
     assert run.diff_path == str(saved_dir / "diff.patch")
-    assert len(artifacts) == 5
+    assert len(artifacts) == 6
     assert {artifact.kind for artifact in artifacts} == {"diff", "log", "report", "summary"}
-    assert [event.event_type for event in events].count("artifact.created") == 5
-    assert events[0].event_type == "run.completed"
+    assert [event.event_type for event in events].count("artifact.created") == 6
+    assert [event.event_type for event in events] == [
+        "sandbox.runtime_checked",
+        "verification.completed",
+        "verification.completed",
+        "artifact.created",
+        "artifact.created",
+        "artifact.created",
+        "artifact.created",
+        "artifact.created",
+        "artifact.created",
+        "run.completed",
+    ]
+    assert [event.event_type for event in events].count("verification.completed") == 2
 
 
 def test_backend_service_ingest_requires_existing_project(tmp_path: Path) -> None:

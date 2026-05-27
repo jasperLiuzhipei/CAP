@@ -55,6 +55,9 @@ def test_api_project_and_run_lifecycle(tmp_path: Path) -> None:
     client, _ = build_client(tmp_path)
 
     assert client.get("/api/v1/health").json() == {"status": "ok"}
+    runtime_config = client.get("/api/v1/runtime/config").json()
+    assert runtime_config["worker_max_turns"] == 32
+    assert runtime_config["sandbox_runtime_enabled"] is True
 
     project = create_project(client, tmp_path)
     assert project["name"] == "Sample"
@@ -80,6 +83,25 @@ def test_api_project_and_run_lifecycle(tmp_path: Path) -> None:
     ).json()
     assert finished["status"] == "succeeded"
     assert finished["summary"] == "done"
+
+
+def test_api_run_create_defaults_to_project_model_provider(tmp_path: Path) -> None:
+    client, _ = build_client(tmp_path)
+    project = create_project(client, tmp_path)
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "project_id": project["id"],
+            "task": "Fix bug",
+        },
+    )
+
+    assert response.status_code == 200
+    run = response.json()
+    assert run["model_provider"] == "deepseek"
+    assert run["model"] == "deepseek-v4-flash"
+    assert run["tool_strategy"] == "compat_functions"
 
 
 def test_api_tool_review_approval_and_listing(tmp_path: Path) -> None:

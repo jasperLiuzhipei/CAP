@@ -26,6 +26,8 @@
 - [Phase 2 Run Worker](docs/15-phase-two-run-worker.md)
 - [Phase 2 Run Events and Timeline](docs/16-phase-two-run-events.md)
 - [Phase 2 Async Worker and Live Events](docs/17-phase-two-async-worker.md)
+- [Phase 2 Sandbox Runtime Provisioning](docs/18-phase-two-sandbox-runtime.md)
+- [Phase 2 API AI Run](docs/19-phase-two-api-ai-run.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -39,6 +41,8 @@
 - 已接通第二阶段本地 run worker：API 创建 queued run 后，可触发 `run_phase_one()` 执行并把结果写回原 run。
 - 已补齐第二阶段 run timeline：RunEvent 持久化、events API、SSE 格式事件流和关键生命周期事件。
 - 已补齐第二阶段后台 worker：可启动/停止后台队列，自动消费 queued run，并支持 `follow=true` 实时事件流。
+- 已补齐第二阶段 sandbox runtime provisioning：为 Python runtime 增加 path grants、health check、pytest sandbox-safe 命令归一化，解决 macOS sandbox 中 `encodings` 缺失导致 pytest 不稳定的问题。
+- 已补齐 API 级 AI run 入口：`copilot_agent.api.main:app` 读取 `.env`，可自动启动后台 worker，并让 `POST /runs` 复用 project 或 env 的默认模型路由。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
@@ -100,17 +104,34 @@ copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx
 
 `apply-run` 会先执行 `git apply --check`，通过后才把保存的 sandbox diff 应用回真实仓库。
 
-如果本地 macOS sandbox 里的 Python runtime 不可用，可以使用 `--host-verify`。它会把 sandbox diff 应用到一个临时仓库副本，再在沙箱外运行同一条验证命令，不会直接修改真实仓库。
+CLI 默认会开启 sandbox runtime provisioning：如果验证命令里出现宿主机绝对路径 Python，例如 `.venv/bin/python -m pytest tests`，sandbox 会自动改写为 sandbox-safe Python 命令，并给 Python 标准库和 venv roots 增加只读授权。
+
+如果仍然希望双保险，可以继续使用 `--host-verify`。它会把 sandbox diff 应用到一个临时仓库副本，再在沙箱外运行原始验证命令，不会直接修改真实仓库。
 
 ## Local API
 
 启动第二阶段本地 API：
 
 ```bash
-.venv/bin/uvicorn copilot_agent.api.main:app --reload
+PYTHONPATH=src .venv/bin/uvicorn copilot_agent.api.main:app --reload
 ```
 
 默认数据库路径是当前目录下的 `.copilot/control.sqlite`。API 文档入口是 `http://127.0.0.1:8000/docs`。
+
+如果希望 API 创建 run 后自动执行，可以在 `.env` 中配置：
+
+```env
+COPILOT_API_AUTO_START_WORKER=true
+COPILOT_WORKER_TEST_CMD=python -m pytest tests
+COPILOT_WORKER_HOST_VERIFY=true
+COPILOT_WORKER_MEMORY_ENABLED=true
+```
+
+查看当前 API runtime：
+
+```bash
+curl http://127.0.0.1:8000/api/v1/runtime/config
+```
 
 本地触发一次 queued run 执行：
 
@@ -134,3 +155,5 @@ curl -X POST http://127.0.0.1:8000/api/v1/worker/start
 curl "http://127.0.0.1:8000/api/v1/runs/<run_id>/events/stream?follow=true"
 curl -X POST http://127.0.0.1:8000/api/v1/worker/stop
 ```
+
+完整 API 级 AI run 流程见 [Phase 2 API AI Run](docs/19-phase-two-api-ai-run.md)。
