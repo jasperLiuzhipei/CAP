@@ -64,6 +64,15 @@ class CopilotBackendService:
             raise ValueError("Project name must not be empty.")
         return self.store.create_project(project)
 
+    def get_project(self, project_id: str) -> Project:
+        project = self.store.get_project(project_id)
+        if project is None:
+            raise FileNotFoundError(f"Project not found: {project_id}")
+        return project
+
+    def list_projects(self) -> list[Project]:
+        return self.store.list_projects()
+
     def queue_run(
         self,
         *,
@@ -91,6 +100,17 @@ class CopilotBackendService:
                 sandbox_backend=sandbox_backend,
             )
         )
+
+    def get_run(self, run_id: str) -> RunRecord:
+        run = self.store.get_run(run_id)
+        if run is None:
+            raise FileNotFoundError(f"Run not found: {run_id}")
+        return run
+
+    def list_runs(self, project_id: str | None = None) -> list[RunRecord]:
+        if project_id is not None and self.store.get_project(project_id) is None:
+            raise FileNotFoundError(f"Project not found: {project_id}")
+        return self.store.list_runs(project_id)
 
     def start_run(self, run_id: str) -> RunRecord:
         return self.store.update_run_status(run_id, "running")
@@ -158,6 +178,10 @@ class CopilotBackendService:
             self.store.update_run_status(run_id, "needs_approval")
         return ToolReview(decision=decision, tool_call=tool_call, approval=approval)
 
+    def list_tool_calls(self, run_id: str) -> list[ToolCall]:
+        self.get_run(run_id)
+        return self.store.list_tool_calls(run_id)
+
     def decide_approval(
         self,
         approval_id: str,
@@ -171,6 +195,14 @@ class CopilotBackendService:
             decision,
             decided_by=decided_by,
         )
+
+    def list_approvals(self, run_id: str) -> list[Approval]:
+        self.get_run(run_id)
+        return self.store.list_approvals(run_id)
+
+    def list_artifacts(self, run_id: str) -> list[Artifact]:
+        self.get_run(run_id)
+        return self.store.list_artifacts(run_id)
 
     def ingest_phase_one_report(self, project_id: str, report: PhaseOneReport) -> RunRecord:
         """Persist a completed phase-one CLI report as backend run state."""

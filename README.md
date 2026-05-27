@@ -22,6 +22,7 @@
 - [Phase 1 Local Sandbox CLI](docs/11-phase-one-local-cli.md)
 - [Model Provider Env 设计](docs/12-model-provider-env-design.md)
 - [Phase 2 Backend Control Plane Foundation](docs/13-phase-two-backend-foundation.md)
+- [Phase 2 API Layer](docs/14-phase-two-api-layer.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -31,6 +32,7 @@
 - 已验证 DeepSeek 兼容 API 可运行 sample repo 修复任务，并新增函数工具版 `apply_patch` 兼容层，让 Chat Completions provider 更接近 OpenAI 原生 patch 流程。
 - 已补齐本地 Copilot MVP 闭环：项目初始化、project memory、历史 run 查看、sandbox diff 审计、手动应用 run patch。
 - 已开始第二阶段后端控制平面：Project、Run、ToolCall、Approval、Artifact、SQLite store、工具策略和 Phase 1 report 入库。
+- 已补齐第二阶段 API 层：FastAPI app、Project/Run/Approval/Artifact routes、diff 查询和 API 集成测试。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
@@ -93,3 +95,13 @@ copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx
 `apply-run` 会先执行 `git apply --check`，通过后才把保存的 sandbox diff 应用回真实仓库。
 
 如果本地 macOS sandbox 里的 Python runtime 不可用，可以使用 `--host-verify`。它会把 sandbox diff 应用到一个临时仓库副本，再在沙箱外运行同一条验证命令，不会直接修改真实仓库。
+
+## Local API
+
+启动第二阶段本地 API：
+
+```bash
+.venv/bin/uvicorn copilot_agent.api.main:app --reload
+```
+
+默认数据库路径是当前目录下的 `.copilot/control.sqlite`。API 文档入口是 `http://127.0.0.1:8000/docs`。
