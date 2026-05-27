@@ -21,6 +21,7 @@
 - [实现蓝图](docs/10-implementation-blueprint.md)
 - [Phase 1 Local Sandbox CLI](docs/11-phase-one-local-cli.md)
 - [Model Provider Env 设计](docs/12-model-provider-env-design.md)
+- [Phase 2 Backend Control Plane Foundation](docs/13-phase-two-backend-foundation.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -29,6 +30,7 @@
 - 已创建阶段一最小 CLI skeleton：`copilot-agent run --repo ... --task ...`。
 - 已验证 DeepSeek 兼容 API 可运行 sample repo 修复任务，并新增函数工具版 `apply_patch` 兼容层，让 Chat Completions provider 更接近 OpenAI 原生 patch 流程。
 - 已补齐本地 Copilot MVP 闭环：项目初始化、project memory、历史 run 查看、sandbox diff 审计、手动应用 run patch。
+- 已开始第二阶段后端控制平面：Project、Run、ToolCall、Approval、Artifact、SQLite store、工具策略和 Phase 1 report 入库。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
