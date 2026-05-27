@@ -45,6 +45,9 @@ http://127.0.0.1:8000/app
 
 新增 `sandbox_backend.py`，用 registry 表达当前和未来的 sandbox backend。
 
+后续第三阶段已经在这个 registry 上继续推进：`SandboxBackend` protocol 和
+`UnixLocalSandboxBackend` adapter 已经实现，当前文档仍保留第二阶段产品入口说明。
+
 当前后端：
 
 | Backend | 状态 | 用途 |
@@ -64,7 +67,7 @@ curl http://127.0.0.1:8000/api/v1/sandbox/backends
 
 这一层仍然不替代 SDK sandbox。
 
-现在的执行路径仍然是：
+第二阶段刚完成时的执行路径是：
 
 ```text
 RunWorker
@@ -74,21 +77,31 @@ RunWorker
   -> SandboxAgent + Runner
 ```
 
-新增 registry 的价值是把“产品层支持哪些 sandbox 后端”从 `phase_one.py` 里拆出来。后续 Docker backend 可以接入同一个 registry、API schema、RunRecord 和 UI 选择器。
+新增 registry 的价值是把“产品层支持哪些 sandbox 后端”从 `phase_one.py` 里拆出来。第三阶段已经把这条路径推进成：
+
+```text
+RunWorker
+  -> PhaseOneConfig(sandbox_backend="unix_local")
+  -> run_phase_one()
+  -> SandboxBackend adapter
+  -> OpenAI Agents SDK UnixLocalSandboxClient
+  -> SandboxAgent + Runner
+```
+
+后续 Docker backend 可以接入同一个 registry、API schema、RunRecord、UI 选择器和 adapter protocol。
 
 ## 当前边界
 
 - UI 是 MVP 控制台，不是最终前端架构。
 - UI 使用轮询和 SSE，不做复杂状态管理。
 - `docker` 只是 planned backend，不执行真实 run。
-- 真实 sandbox abstraction 还没有把 `run_phase_one()` 内部 client 创建完全抽象出去。
+- 真实 Docker execution 还未实现；当前可执行 backend 仍然是 `unix_local`。
 
 ## 下一步
 
 建议继续做 Docker sandbox backend 的第一版设计：
 
-1. 定义 `SandboxBackend` protocol。
-2. 把 manifest creation、client creation、runtime provisioning 挪到 backend adapter。
-3. 实现 `UnixLocalSandboxBackend`。
-4. 预留 `DockerSandboxBackend`。
-5. 再做真实 Docker execution。
+1. 预留 `DockerSandboxBackend` adapter。
+2. 定义 Docker workspace mount、网络策略和资源限制。
+3. 实现真实 Docker execution。
+4. 对齐 artifact、verification、RunEvent 和 UI 展示。
