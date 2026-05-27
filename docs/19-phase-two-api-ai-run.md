@@ -131,8 +131,11 @@ curl "http://127.0.0.1:8000/api/v1/runs/<run_id>/events/stream?follow=true"
 - `run.started`
 - `sandbox.runtime_checked`
 - `verification.completed`
-- `run.completed`
 - `artifact.created`
+- `run.completed`
+
+`run.completed` 是最终事件。这样前端或 CLI 使用 `follow=true` 时，不会在 runtime、
+verification、artifact 事件写完前提前停止。
 
 ### 6. 查看结果
 
