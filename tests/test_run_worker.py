@@ -76,6 +76,8 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
                 output_dir=tmp_path / "runs",
                 sandbox_python="python3.13",
                 sandbox_runtime_enabled=False,
+                docker_image="copilot-python:latest",
+                docker_exposed_ports=(8000,),
                 require_api_key=False,
             ),
         )
@@ -106,6 +108,8 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
     assert config.test_cmd == "pytest tests"
     assert not config.sandbox_runtime_enabled
     assert config.sandbox_python == "python3.13"
+    assert config.docker_image == "copilot-python:latest"
+    assert config.docker_exposed_ports == (8000,)
     assert config.memory_enabled
     assert config.memory_path == Path(project.memory_path)
 

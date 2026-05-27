@@ -30,6 +30,7 @@
 - [Phase 2 API AI Run](docs/19-phase-two-api-ai-run.md)
 - [Phase 2 Web UI and Sandbox Backends](docs/20-phase-two-web-ui-sandbox-backends.md)
 - [Phase 3 Sandbox Backend Protocol](docs/21-phase-three-sandbox-backend-protocol.md)
+- [Phase 3 Docker Sandbox Backend](docs/22-phase-three-docker-sandbox-backend.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -45,8 +46,9 @@
 - 已补齐第二阶段后台 worker：可启动/停止后台队列，自动消费 queued run，并支持 `follow=true` 实时事件流。
 - 已补齐第二阶段 sandbox runtime provisioning：为 Python runtime 增加 path grants、health check、pytest sandbox-safe 命令归一化，解决 macOS sandbox 中 `encodings` 缺失导致 pytest 不稳定的问题。
 - 已补齐 API 级 AI run 入口：`copilot_agent.api.main:app` 读取 `.env`，可自动启动后台 worker，并让 `POST /runs` 复用 project 或 env 的默认模型路由。
-- 已补齐轻量 Web UI 控制台和 sandbox backend registry：浏览器可创建 project/run、查看 timeline/artifacts/diff，并暴露 `unix_local` 与 planned `docker` backend。
+- 已补齐轻量 Web UI 控制台和 sandbox backend registry：浏览器可创建 project/run、查看 timeline/artifacts/diff，并暴露 `unix_local` 与 `docker` backend。
 - 已开始第三阶段 sandbox backend 抽象：定义 `SandboxBackend` protocol，并把现有 OpenAI Agents SDK `UnixLocalSandboxClient` 收口到 `UnixLocalSandboxBackend` adapter。
+- 已接入第三阶段 Docker sandbox backend：平台可通过 OpenAI Agents SDK `DockerSandboxClient` 创建容器 sandbox，并支持 Docker image 与 exposed ports 配置。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
@@ -130,6 +132,9 @@ COPILOT_API_AUTO_START_WORKER=true
 COPILOT_WORKER_TEST_CMD=python -m pytest tests
 COPILOT_WORKER_HOST_VERIFY=true
 COPILOT_WORKER_MEMORY_ENABLED=true
+# Optional Docker sandbox defaults.
+COPILOT_DOCKER_IMAGE=python:3.13-slim
+COPILOT_DOCKER_EXPOSED_PORTS=8000,5173
 ```
 
 查看当前 API runtime：

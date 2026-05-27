@@ -11,6 +11,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+docker = [
+    "docker>=7,<8",
+]
 dev = [
     "httpx>=0.28",
     "pytest-cov>=6",

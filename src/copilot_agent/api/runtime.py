@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
 from copilot_agent.env import load_dotenv
+from copilot_agent.sandbox_backend import DEFAULT_DOCKER_IMAGE, parse_docker_exposed_ports
 from copilot_agent.worker import BackgroundRunWorker, RunExecutionOptions, RunWorker
 
 from .app import create_app
@@ -52,6 +53,10 @@ class ApiRuntimeConfig:
                     default=True,
                 ),
                 sandbox_python=source.get("COPILOT_SANDBOX_PYTHON", "python3"),
+                docker_image=source.get("COPILOT_DOCKER_IMAGE", DEFAULT_DOCKER_IMAGE),
+                docker_exposed_ports=parse_docker_exposed_ports(
+                    source.get("COPILOT_DOCKER_EXPOSED_PORTS")
+                ),
                 require_api_key=_env_bool(source, "COPILOT_WORKER_REQUIRE_API_KEY", default=True),
             ),
         )

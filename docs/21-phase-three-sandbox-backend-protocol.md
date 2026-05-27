@@ -66,17 +66,17 @@ API / CLI
 - `SandboxBackend` protocol。
 - `SandboxSessionHandle`。
 - `UnixLocalSandboxBackend`。
-- planned `docker` backend adapter 占位。
+- `DockerSandboxBackend` adapter。
 - `run_phase_one()` 改为通过 adapter 创建和销毁 session。
-- 单元测试覆盖 manifest 构造、session lifecycle 和 planned backend 不可执行行为。
+- 单元测试覆盖 manifest 构造、session lifecycle、Docker image/options 传递和端口解析。
 
 ## 下一步
 
-下一块建议做 `DockerSandboxBackend` 第一版设计和实现：
+下一块建议做 Docker backend 的生产化增强：
 
-- Docker 临时 workspace mount。
-- 只读/读写目录边界。
-- Python 依赖 provisioning 策略。
+- 固定 Docker image baseline。
+- Python/Node 依赖 provisioning 与缓存。
 - 网络默认关闭或可配置。
 - CPU、内存、超时限制。
+- 真实 Docker smoke test。
 - verification 和 artifact 继续复用现有 RunEvent/report contract。

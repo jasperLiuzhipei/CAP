@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 from pathlib import Path
 
 import pytest
 
 from copilot_agent.sandbox_backend import (
+    DEFAULT_DOCKER_IMAGE,
+    DockerSandboxBackend,
     SandboxBackend,
+    SandboxBackendRunOptions,
     UnixLocalSandboxBackend,
+    _resolve_docker_sdk,
     get_sandbox_backend,
     get_sandbox_backend_adapter,
     list_sandbox_backends,
+    parse_docker_exposed_ports,
     validate_sandbox_backend,
+    validate_sandbox_backend_run_options,
 )
 
 
@@ -50,11 +57,50 @@ class FakeUnixLocalSandboxClient:
         self.deleted_sandbox = sandbox
 
 
+class FakeDockerSDKClient:
+    pass
+
+
+class FakeDockerSandboxClientOptions:
+    def __init__(
+        self,
+        *,
+        image: str,
+        exposed_ports: tuple[int, ...] = (),
+    ) -> None:
+        self.image = image
+        self.exposed_ports = exposed_ports
+
+
+class FakeDockerSandboxClient:
+    def __init__(self, docker_client: object) -> None:
+        self.docker_client = docker_client
+        self.created_manifest: object | None = None
+        self.created_options: FakeDockerSandboxClientOptions | None = None
+        self.deleted_sandbox: object | None = None
+
+    async def create(
+        self,
+        *,
+        manifest: object,
+        options: FakeDockerSandboxClientOptions,
+    ) -> object:
+        self.created_manifest = manifest
+        self.created_options = options
+        return {"manifest": manifest, "image": options.image}
+
+    async def delete(self, sandbox: object) -> None:
+        self.deleted_sandbox = sandbox
+
+
 FAKE_SDK = {
     "LocalDir": FakeLocalDir,
     "Manifest": FakeManifest,
     "SandboxPathGrant": FakeSandboxPathGrant,
     "UnixLocalSandboxClient": FakeUnixLocalSandboxClient,
+    "docker_from_env": FakeDockerSDKClient,
+    "DockerSandboxClient": FakeDockerSandboxClient,
+    "DockerSandboxClientOptions": FakeDockerSandboxClientOptions,
 }
 
 
@@ -63,18 +109,17 @@ def test_sandbox_backend_registry_exposes_available_and_planned_backends() -> No
 
     assert backends["unix_local"].available
     assert backends["unix_local"].supports_path_grants
-    assert backends["docker"].status == "planned"
-    assert not backends["docker"].available
+    assert backends["docker"].status == "available"
+    assert backends["docker"].available
+    assert not backends["docker"].supports_path_grants
 
 
-def test_sandbox_backend_validation_rejects_unknown_or_unavailable_backends() -> None:
+def test_sandbox_backend_validation_rejects_unknown_backends() -> None:
     assert validate_sandbox_backend("unix_local").id == "unix_local"
-    assert validate_sandbox_backend("docker", require_available=False).id == "docker"
+    assert validate_sandbox_backend("docker").id == "docker"
 
     with pytest.raises(ValueError, match="Unsupported sandbox backend"):
         get_sandbox_backend("space_station")
-    with pytest.raises(ValueError, match="planned"):
-        validate_sandbox_backend("docker")
 
 
 def test_unix_local_backend_builds_openai_agents_manifest(tmp_path: Path) -> None:
@@ -115,9 +160,102 @@ def test_unix_local_backend_owns_session_lifecycle(tmp_path: Path) -> None:
     asyncio.run(run_lifecycle())
 
 
-def test_planned_backend_is_visible_but_not_executable(tmp_path: Path) -> None:
-    backend = get_sandbox_backend_adapter("docker", require_available=False)
+def test_docker_backend_builds_manifest_without_host_runtime_grants(tmp_path: Path) -> None:
+    backend = get_sandbox_backend_adapter("docker")
+    runtime_root = tmp_path / "python"
+    runtime_root.mkdir()
 
-    assert backend.spec.status == "planned"
-    with pytest.raises(NotImplementedError, match="planned"):
-        backend.build_manifest(FAKE_SDK, repo=tmp_path, runtime_grant_paths=[])
+    manifest = backend.build_manifest(
+        FAKE_SDK,
+        repo=tmp_path,
+        runtime_grant_paths=[runtime_root],
+    )
+
+    assert isinstance(backend, DockerSandboxBackend)
+    assert isinstance(manifest.entries["repo"], FakeLocalDir)
+    assert manifest.entries["repo"].src == tmp_path
+    assert manifest.extra_path_grants == ()
+
+
+def test_docker_backend_owns_session_lifecycle(tmp_path: Path) -> None:
+    async def run_lifecycle() -> None:
+        backend = get_sandbox_backend_adapter("docker")
+        manifest = FakeManifest(entries={}, extra_path_grants=())
+
+        handle = await backend.create_session(
+            FAKE_SDK,
+            manifest=manifest,
+            options=SandboxBackendRunOptions(
+                docker_image="copilot-test:latest",
+                docker_exposed_ports=(8000, 5173),
+            ),
+        )
+        await backend.delete_session(handle)
+
+        assert handle.backend_id == "docker"
+        assert isinstance(handle.client, FakeDockerSandboxClient)
+        assert isinstance(handle.client.docker_client, FakeDockerSDKClient)
+        assert handle.client.created_manifest is manifest
+        assert handle.client.created_options is not None
+        assert handle.client.created_options.image == "copilot-test:latest"
+        assert handle.client.created_options.exposed_ports == (8000, 5173)
+        assert handle.sandbox == {"manifest": manifest, "image": "copilot-test:latest"}
+        assert handle.client.deleted_sandbox == handle.sandbox
+
+    asyncio.run(run_lifecycle())
+
+
+def test_docker_backend_wraps_daemon_connection_errors() -> None:
+    async def run_lifecycle() -> None:
+        def failing_docker_from_env() -> object:
+            raise RuntimeError("socket unavailable")
+
+        sdk = {
+            **FAKE_SDK,
+            "docker_from_env": failing_docker_from_env,
+        }
+        backend = get_sandbox_backend_adapter("docker")
+        manifest = FakeManifest(entries={}, extra_path_grants=())
+
+        with pytest.raises(RuntimeError, match="could not connect to the Docker daemon"):
+            await backend.create_session(sdk, manifest=manifest)
+
+    asyncio.run(run_lifecycle())
+
+
+def test_docker_backend_defaults_and_port_parsing() -> None:
+    assert SandboxBackendRunOptions().docker_image == DEFAULT_DOCKER_IMAGE
+    assert parse_docker_exposed_ports(None) == ()
+    assert parse_docker_exposed_ports("8000, 5173,8000") == (8000, 5173)
+
+    with pytest.raises(ValueError, match="integers"):
+        parse_docker_exposed_ports("abc")
+    with pytest.raises(ValueError, match="between"):
+        parse_docker_exposed_ports("70000")
+
+
+def test_docker_backend_missing_dependency_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "agents.sandbox.sandboxes.docker":
+            raise ImportError("missing docker support")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="Docker sandbox backend requires Docker support"):
+        _resolve_docker_sdk({})
+
+
+def test_sandbox_backend_run_options_validation() -> None:
+    validate_sandbox_backend_run_options(SandboxBackendRunOptions())
+
+    with pytest.raises(ValueError, match="Docker image"):
+        validate_sandbox_backend_run_options(SandboxBackendRunOptions(docker_image=" "))
+    with pytest.raises(ValueError, match="between"):
+        validate_sandbox_backend_run_options(
+            SandboxBackendRunOptions(docker_exposed_ports=(0,))
+        )

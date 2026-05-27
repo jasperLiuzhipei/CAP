@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from .phase_one import (
     validate_config,
 )
 from .runs import apply_run_patch, list_runs, load_report, read_run_text, resolve_run_dir
-from .sandbox_backend import SANDBOX_BACKENDS
+from .sandbox_backend import DEFAULT_DOCKER_IMAGE, SANDBOX_BACKENDS, parse_docker_exposed_ports
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -105,7 +106,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sandbox-backend",
         default="unix_local",
         choices=tuple(SANDBOX_BACKENDS),
-        help="Sandbox backend to use for this run. Currently only unix_local is executable.",
+        help="Sandbox backend to use for this run.",
+    )
+    run.add_argument(
+        "--docker-image",
+        default=None,
+        help=(
+            "Docker image for --sandbox-backend docker. Defaults to COPILOT_DOCKER_IMAGE "
+            f"or {DEFAULT_DOCKER_IMAGE}."
+        ),
+    )
+    run.add_argument(
+        "--docker-exposed-port",
+        action="append",
+        type=int,
+        default=[],
+        help="Expose a container port on localhost for Docker sandbox runs. Repeatable.",
     )
     run.add_argument(
         "--sandbox-python",
@@ -180,6 +196,8 @@ def _config_from_args(
     args: argparse.Namespace,
     model_config: ResolvedModelConfig,
 ) -> PhaseOneConfig:
+    env_ports = parse_docker_exposed_ports(os.getenv("COPILOT_DOCKER_EXPOSED_PORTS"))
+    docker_exposed_ports = tuple(dict.fromkeys([*env_ports, *args.docker_exposed_port]))
     return PhaseOneConfig(
         repo=args.repo.resolve(),
         task=args.task,
@@ -199,6 +217,10 @@ def _config_from_args(
         sandbox_backend=args.sandbox_backend,
         sandbox_runtime_enabled=not args.no_sandbox_runtime,
         sandbox_python=args.sandbox_python,
+        docker_image=args.docker_image
+        or os.getenv("COPILOT_DOCKER_IMAGE")
+        or DEFAULT_DOCKER_IMAGE,
+        docker_exposed_ports=docker_exposed_ports,
     )
 
 
@@ -226,6 +248,9 @@ async def _run(args: argparse.Namespace) -> int:
             f"({config.sandbox_python})",
         )
         print("Sandbox backend:", config.sandbox_backend)
+        if config.sandbox_backend == "docker":
+            print("Docker image:", config.docker_image)
+            print("Docker exposed ports:", config.docker_exposed_ports or "none")
         print()
         print("Generated agent prompt:\n")
         print(build_phase_one_prompt(config))

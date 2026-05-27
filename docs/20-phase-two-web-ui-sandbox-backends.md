@@ -45,15 +45,16 @@ http://127.0.0.1:8000/app
 
 新增 `sandbox_backend.py`，用 registry 表达当前和未来的 sandbox backend。
 
-后续第三阶段已经在这个 registry 上继续推进：`SandboxBackend` protocol 和
-`UnixLocalSandboxBackend` adapter 已经实现，当前文档仍保留第二阶段产品入口说明。
+后续第三阶段已经在这个 registry 上继续推进：`SandboxBackend` protocol、
+`UnixLocalSandboxBackend` adapter 和 `DockerSandboxBackend` adapter 已经实现，
+当前文档仍保留第二阶段产品入口说明。
 
 当前后端：
 
 | Backend | 状态 | 用途 |
 | --- | --- | --- |
 | `unix_local` | available | 本地开发，使用 OpenAI Agents SDK `UnixLocalSandboxClient` |
-| `docker` | planned | 生产化方向，未来提供容器隔离和依赖环境 |
+| `docker` | available | 容器隔离方向，使用 OpenAI Agents SDK `DockerSandboxClient` |
 
 API：
 
@@ -61,7 +62,7 @@ API：
 curl http://127.0.0.1:8000/api/v1/sandbox/backends
 ```
 
-`POST /runs` 会校验 `sandbox_backend`。当前只有 `unix_local` 可执行，`docker` 会作为 planned backend 暴露给 UI 和文档，但还不能用于 run execution。
+`POST /runs` 会校验 `sandbox_backend`。当前 `unix_local` 和 `docker` 都可作为平台 backend 选择；`docker` 真正执行时要求安装 Python `docker` 包、启动 Docker daemon，并选择包含任务所需工具的镜像。
 
 ## 和 OpenAI Agents SDK 的关系
 
@@ -90,18 +91,30 @@ RunWorker
 
 后续 Docker backend 可以接入同一个 registry、API schema、RunRecord、UI 选择器和 adapter protocol。
 
+第三阶段已经接入：
+
+```text
+RunWorker
+  -> PhaseOneConfig(sandbox_backend="docker", docker_image="python:3.13-slim")
+  -> run_phase_one()
+  -> DockerSandboxBackend
+  -> OpenAI Agents SDK DockerSandboxClient
+  -> SandboxAgent + Runner
+```
+
 ## 当前边界
 
 - UI 是 MVP 控制台，不是最终前端架构。
 - UI 使用轮询和 SSE，不做复杂状态管理。
-- `docker` 只是 planned backend，不执行真实 run。
-- 真实 Docker execution 还未实现；当前可执行 backend 仍然是 `unix_local`。
+- `docker` backend 依赖本机 Docker daemon 和镜像环境。
+- Docker image 必须包含任务需要的 runtime 工具，例如 Python、pip、pytest、git、node 等。
+- Docker backend 当前复用现有 artifact、verification、RunEvent contract，还没有做企业级资源配额策略。
 
 ## 下一步
 
-建议继续做 Docker sandbox backend 的第一版设计：
+建议继续做 Docker sandbox backend 的生产化增强：
 
-1. 预留 `DockerSandboxBackend` adapter。
-2. 定义 Docker workspace mount、网络策略和资源限制。
-3. 实现真实 Docker execution。
-4. 对齐 artifact、verification、RunEvent 和 UI 展示。
+1. 定义 Docker image baseline。
+2. 增加 CPU、内存、网络、超时限制。
+3. 增加 dependency provisioning/cache 策略。
+4. 增加真实 Docker smoke test。
