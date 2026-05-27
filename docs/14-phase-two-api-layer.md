@@ -48,6 +48,7 @@ GET /api/v1/runs?project_id={project_id}
 GET /api/v1/runs/{run_id}
 POST /api/v1/runs/{run_id}/start
 POST /api/v1/runs/{run_id}/finish
+POST /api/v1/runs/{run_id}/execute
 GET /api/v1/runs/{run_id}/diff
 ```
 

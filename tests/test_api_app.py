@@ -8,6 +8,8 @@ from copilot_agent.api import create_app
 from copilot_agent.backend.models import Artifact
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
+from copilot_agent.phase_one import PhaseOneConfig, PhaseOneReport
+from copilot_agent.worker import RunWorker
 
 
 def build_client(tmp_path: Path) -> tuple[TestClient, CopilotBackendService]:
@@ -136,6 +138,50 @@ def test_api_artifacts_and_diff_endpoint(tmp_path: Path) -> None:
     assert diff["source"] == str(diff_path)
 
 
+def test_api_execute_run_uses_worker_and_returns_updated_run(tmp_path: Path) -> None:
+    service = CopilotBackendService(SQLiteBackendStore(tmp_path / "control.sqlite"))
+
+    async def fake_runner(config: PhaseOneConfig) -> PhaseOneReport:
+        saved_dir = tmp_path / "runs" / "sdk_run"
+        saved_dir.mkdir(parents=True)
+        (saved_dir / "report.json").write_text("{}", encoding="utf-8")
+        (saved_dir / "final.md").write_text("done", encoding="utf-8")
+        (saved_dir / "diff.patch").write_text("--- repo/a.py\n+++ repo/a.py\n", encoding="utf-8")
+        return PhaseOneReport(
+            run_id="sdk_run",
+            repo=str(config.repo),
+            task=config.task,
+            model=config.model_config.model,
+            model_provider=config.model_config.provider,
+            model_transport=config.model_config.transport,
+            tool_strategy=config.model_config.tool_strategy,
+            model_base_url=config.model_config.base_url,
+            prompt="prompt",
+            final_output="done",
+            diff="--- repo/a.py\n+++ repo/a.py\n",
+            saved_dir=str(saved_dir),
+        )
+
+    worker = RunWorker(service, runner=fake_runner)
+    client = TestClient(create_app(service=service, worker=worker))
+    project = create_project(client, tmp_path)
+    run = create_run(client, str(project["id"]))
+
+    executed = client.post(
+        f"/api/v1/runs/{run['id']}/execute",
+        json={
+            "output_dir": str(tmp_path / "runs"),
+            "require_api_key": False,
+        },
+    ).json()
+    diff = client.get(f"/api/v1/runs/{run['id']}/diff").json()
+
+    assert executed["id"] == run["id"]
+    assert executed["status"] == "succeeded"
+    assert executed["summary"] == "done"
+    assert diff["diff"] == "--- repo/a.py\n+++ repo/a.py\n"
+
+
 def test_api_maps_invalid_requests_to_http_errors(tmp_path: Path) -> None:
     client, _ = build_client(tmp_path)
 
@@ -159,6 +205,7 @@ def test_api_maps_invalid_requests_to_http_errors(tmp_path: Path) -> None:
     ).status_code == 404
     assert client.get("/api/v1/runs/missing/artifacts").status_code == 404
     assert client.get("/api/v1/runs/missing/diff").status_code == 404
+    assert client.post("/api/v1/runs/missing/execute", json={}).status_code == 404
     assert client.post(
         "/api/v1/approvals/missing/decide",
         json={"approved": False, "decided_by": "jasper"},

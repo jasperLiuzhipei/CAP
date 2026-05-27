@@ -23,6 +23,7 @@
 - [Model Provider Env 设计](docs/12-model-provider-env-design.md)
 - [Phase 2 Backend Control Plane Foundation](docs/13-phase-two-backend-foundation.md)
 - [Phase 2 API Layer](docs/14-phase-two-api-layer.md)
+- [Phase 2 Run Worker](docs/15-phase-two-run-worker.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -33,6 +34,7 @@
 - 已补齐本地 Copilot MVP 闭环：项目初始化、project memory、历史 run 查看、sandbox diff 审计、手动应用 run patch。
 - 已开始第二阶段后端控制平面：Project、Run、ToolCall、Approval、Artifact、SQLite store、工具策略和 Phase 1 report 入库。
 - 已补齐第二阶段 API 层：FastAPI app、Project/Run/Approval/Artifact routes、diff 查询和 API 集成测试。
+- 已接通第二阶段本地 run worker：API 创建 queued run 后，可触发 `run_phase_one()` 执行并把结果写回原 run。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
@@ -105,3 +107,11 @@ copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx
 ```
 
 默认数据库路径是当前目录下的 `.copilot/control.sqlite`。API 文档入口是 `http://127.0.0.1:8000/docs`。
+
+本地触发一次 queued run 执行：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/runs/<run_id>/execute \
+  -H "Content-Type: application/json" \
+  -d '{"test_cmd":"python -m pytest tests","host_verify":true}'
+```

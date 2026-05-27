@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from copilot_agent.backend.models import Artifact
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
+from copilot_agent.worker import RunWorker
 
 from .schemas import (
     ApprovalDecisionCreate,
@@ -16,6 +17,7 @@ from .schemas import (
     ProjectCreate,
     ProjectResponse,
     RunCreate,
+    RunExecute,
     RunFinish,
     RunResponse,
     ToolCallResponse,
@@ -28,6 +30,7 @@ def create_app(
     *,
     db_path: str | Path = ".copilot/control.sqlite",
     service: CopilotBackendService | None = None,
+    worker: RunWorker | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for the Copilot control plane."""
 
@@ -40,6 +43,7 @@ def create_app(
         description="Backend control-plane API for projects, runs, approvals, and artifacts.",
     )
     app.state.copilot_service = resolved_service
+    app.state.copilot_worker = worker or RunWorker(resolved_service)
     app.include_router(_build_router())
     return app
 
@@ -51,7 +55,15 @@ def get_service(request: Request) -> CopilotBackendService:
     return service
 
 
+def get_worker(request: Request) -> RunWorker:
+    worker = getattr(request.app.state, "copilot_worker", None)
+    if not isinstance(worker, RunWorker):
+        raise RuntimeError("Copilot run worker is not configured.")
+    return worker
+
+
 SERVICE_DEPENDENCY = Depends(get_service)
+WORKER_DEPENDENCY = Depends(get_worker)
 
 
 def _build_router():
@@ -187,6 +199,27 @@ def _build_router():
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RunResponse.from_domain(run)
+
+    @router.post(
+        "/runs/{run_id}/execute",
+        response_model=RunResponse,
+        responses={
+            404: {"description": "Run not found"},
+            409: {"description": "Run is not queued"},
+        },
+    )
+    async def execute_run(
+        run_id: str,
+        payload: RunExecute,
+        worker: RunWorker = WORKER_DEPENDENCY,
+    ) -> RunResponse:
+        try:
+            run = await worker.execute_run(run_id, payload.to_options())
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return RunResponse.from_domain(run)
 
     @router.post(

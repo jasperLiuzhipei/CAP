@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ from copilot_agent.backend.models import (
     ToolCall,
 )
 from copilot_agent.backend.service import ToolReview
+from copilot_agent.worker import RunExecutionOptions
 
 
 class ProjectCreate(BaseModel):
@@ -51,6 +53,25 @@ class RunFinish(BaseModel):
     summary: str = ""
     saved_dir: str | None = None
     diff_path: str | None = None
+
+
+class RunExecute(BaseModel):
+    test_cmd: str | None = None
+    max_turns: int = 32
+    output_dir: str = "runs"
+    memory_enabled: bool | None = None
+    host_verify: bool = False
+    require_api_key: bool = True
+
+    def to_options(self) -> RunExecutionOptions:
+        return RunExecutionOptions(
+            test_cmd=self.test_cmd,
+            max_turns=self.max_turns,
+            output_dir=Path(self.output_dir),
+            memory_enabled=self.memory_enabled,
+            host_verify=self.host_verify,
+            require_api_key=self.require_api_key,
+        )
 
 
 class RunResponse(BaseModel):

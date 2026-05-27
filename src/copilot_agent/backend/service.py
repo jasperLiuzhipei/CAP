@@ -204,19 +204,26 @@ class CopilotBackendService:
         self.get_run(run_id)
         return self.store.list_artifacts(run_id)
 
-    def ingest_phase_one_report(self, project_id: str, report: PhaseOneReport) -> RunRecord:
+    def ingest_phase_one_report(
+        self,
+        project_id: str,
+        report: PhaseOneReport,
+        *,
+        run_id: str | None = None,
+    ) -> RunRecord:
         """Persist a completed phase-one CLI report as backend run state."""
 
         if self.store.get_project(project_id) is None:
             raise FileNotFoundError(f"Project not found: {project_id}")
 
+        target_run_id = run_id or report.run_id
         status = _status_from_report(report)
         diff_path = Path(report.saved_dir) / "diff.patch" if report.saved_dir else None
-        existing = self.store.get_run(report.run_id)
+        existing = self.store.get_run(target_run_id)
         if existing is None:
             run = self.store.create_run(
                 RunRecord(
-                    id=report.run_id,
+                    id=target_run_id,
                     project_id=project_id,
                     task=report.task,
                     status=status,
