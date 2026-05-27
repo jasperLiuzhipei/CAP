@@ -15,6 +15,7 @@ from copilot_agent.phase_one import (
     PhaseOneConfig,
     PhaseOneReport,
     SandboxRuntimeReport,
+    _build_sandbox_manifest,
     _build_sandbox_test_command,
     _command_needs_python,
     _command_uses_pytest,
@@ -56,6 +57,35 @@ class ObjectRaw:
 @dataclass
 class ObjectRawItem:
     raw_item: ObjectRaw
+
+
+class FakeSandboxPathGrant:
+    def __init__(self, *, path: Path, read_only: bool) -> None:
+        self.path = path
+        self.read_only = read_only
+
+
+class FakeLocalDir:
+    def __init__(self, *, src: Path) -> None:
+        self.src = src
+
+
+class FakeManifest:
+    def __init__(
+        self,
+        *,
+        entries: dict[str, object],
+        extra_path_grants: tuple[object, ...],
+    ) -> None:
+        self.entries = entries
+        self.extra_path_grants = extra_path_grants
+
+
+FAKE_MANIFEST_SDK = {
+    "LocalDir": FakeLocalDir,
+    "Manifest": FakeManifest,
+    "SandboxPathGrant": FakeSandboxPathGrant,
+}
 
 
 def test_host_verification_runs_on_temp_copy(tmp_path: Path) -> None:
@@ -234,6 +264,30 @@ def test_sandbox_runtime_grants_include_python_roots(tmp_path: Path) -> None:
 
     assert grants
     assert any(path.name in {"python", "python3"} or path.exists() for path in grants)
+
+
+def test_build_sandbox_manifest_uses_backend_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    config = PhaseOneConfig(repo=tmp_path, task="task")
+
+    monkeypatch.setattr(
+        phase_one_module,
+        "_sandbox_runtime_grant_paths",
+        lambda _: [runtime_root],
+    )
+
+    manifest = _build_sandbox_manifest(config, FAKE_MANIFEST_SDK)
+
+    assert isinstance(manifest, FakeManifest)
+    assert isinstance(manifest.entries["repo"], FakeLocalDir)
+    assert manifest.entries["repo"].src == tmp_path
+    assert len(manifest.extra_path_grants) == 1
+    assert manifest.extra_path_grants[0].path == runtime_root
+    assert manifest.extra_path_grants[0].read_only
 
 
 def test_python_runtime_path_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

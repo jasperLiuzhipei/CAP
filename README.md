@@ -29,6 +29,7 @@
 - [Phase 2 Sandbox Runtime Provisioning](docs/18-phase-two-sandbox-runtime.md)
 - [Phase 2 API AI Run](docs/19-phase-two-api-ai-run.md)
 - [Phase 2 Web UI and Sandbox Backends](docs/20-phase-two-web-ui-sandbox-backends.md)
+- [Phase 3 Sandbox Backend Protocol](docs/21-phase-three-sandbox-backend-protocol.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -45,6 +46,7 @@
 - 已补齐第二阶段 sandbox runtime provisioning：为 Python runtime 增加 path grants、health check、pytest sandbox-safe 命令归一化，解决 macOS sandbox 中 `encodings` 缺失导致 pytest 不稳定的问题。
 - 已补齐 API 级 AI run 入口：`copilot_agent.api.main:app` 读取 `.env`，可自动启动后台 worker，并让 `POST /runs` 复用 project 或 env 的默认模型路由。
 - 已补齐轻量 Web UI 控制台和 sandbox backend registry：浏览器可创建 project/run、查看 timeline/artifacts/diff，并暴露 `unix_local` 与 planned `docker` backend。
+- 已开始第三阶段 sandbox backend 抽象：定义 `SandboxBackend` protocol，并把现有 OpenAI Agents SDK `UnixLocalSandboxClient` 收口到 `UnixLocalSandboxBackend` adapter。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
