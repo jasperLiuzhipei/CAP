@@ -1,5 +1,5 @@
 from __future__ import annotations
 
-from .app import create_app
+from .runtime import create_app_from_env
 
-app = create_app()
+app = create_app_from_env()

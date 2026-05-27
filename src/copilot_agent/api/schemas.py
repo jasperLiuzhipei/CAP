@@ -43,9 +43,9 @@ class ProjectResponse(BaseModel):
 class RunCreate(BaseModel):
     project_id: str
     task: str
-    model_provider: str
-    model: str
-    tool_strategy: str
+    model_provider: str | None = None
+    model: str | None = None
+    tool_strategy: str | None = None
     sandbox_backend: str = "unix_local"
 
 
@@ -62,6 +62,8 @@ class RunExecute(BaseModel):
     output_dir: str = "runs"
     memory_enabled: bool | None = None
     host_verify: bool = False
+    sandbox_runtime_enabled: bool = True
+    sandbox_python: str = "python3"
     require_api_key: bool = True
 
     def to_options(self) -> RunExecutionOptions:
@@ -71,6 +73,8 @@ class RunExecute(BaseModel):
             output_dir=Path(self.output_dir),
             memory_enabled=self.memory_enabled,
             host_verify=self.host_verify,
+            sandbox_runtime_enabled=self.sandbox_runtime_enabled,
+            sandbox_python=self.sandbox_python,
             require_api_key=self.require_api_key,
         )
 
@@ -85,6 +89,41 @@ class WorkerStatusResponse(BaseModel):
     @classmethod
     def from_domain(cls, status: BackgroundWorkerStatus) -> WorkerStatusResponse:
         return cls(**status.__dict__)
+
+
+class RuntimeConfigResponse(BaseModel):
+    db_path: str | None
+    auto_start_background_worker: bool
+    worker_test_cmd: str | None
+    worker_max_turns: int
+    worker_output_dir: str
+    worker_memory_enabled: bool | None
+    worker_host_verify: bool
+    worker_require_api_key: bool
+    sandbox_runtime_enabled: bool
+    sandbox_python: str
+
+    @classmethod
+    def from_worker_options(
+        cls,
+        *,
+        runtime_config: dict[str, Any],
+        options: RunExecutionOptions,
+    ) -> RuntimeConfigResponse:
+        return cls(
+            db_path=runtime_config.get("db_path") if runtime_config else None,
+            auto_start_background_worker=bool(
+                runtime_config.get("auto_start_background_worker", False)
+            ),
+            worker_test_cmd=options.test_cmd,
+            worker_max_turns=options.max_turns,
+            worker_output_dir=str(options.output_dir),
+            worker_memory_enabled=options.memory_enabled,
+            worker_host_verify=options.host_verify,
+            worker_require_api_key=options.require_api_key,
+            sandbox_runtime_enabled=options.sandbox_runtime_enabled,
+            sandbox_python=options.sandbox_python,
+        )
 
 
 class RunResponse(BaseModel):
