@@ -113,11 +113,11 @@ def test_api_run_create_defaults_to_project_model_provider(tmp_path: Path) -> No
     assert run["tool_strategy"] == "compat_functions"
 
 
-def test_api_rejects_unavailable_sandbox_backend(tmp_path: Path) -> None:
+def test_api_accepts_docker_and_rejects_unknown_sandbox_backend(tmp_path: Path) -> None:
     client, _ = build_client(tmp_path)
     project = create_project(client, tmp_path)
 
-    response = client.post(
+    docker_response = client.post(
         "/api/v1/runs",
         json={
             "project_id": project["id"],
@@ -125,9 +125,19 @@ def test_api_rejects_unavailable_sandbox_backend(tmp_path: Path) -> None:
             "sandbox_backend": "docker",
         },
     )
+    unknown_response = client.post(
+        "/api/v1/runs",
+        json={
+            "project_id": project["id"],
+            "task": "Fix bug",
+            "sandbox_backend": "space_station",
+        },
+    )
 
-    assert response.status_code == 400
-    assert "planned" in response.json()["detail"]
+    assert docker_response.status_code == 200
+    assert docker_response.json()["sandbox_backend"] == "docker"
+    assert unknown_response.status_code == 400
+    assert "Unsupported sandbox backend" in unknown_response.json()["detail"]
 
 
 def test_api_tool_review_approval_and_listing(tmp_path: Path) -> None:

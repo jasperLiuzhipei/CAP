@@ -8,6 +8,7 @@ from copilot_agent.backend.models import Project, RunRecord
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.model_config import resolve_model_config
 from copilot_agent.phase_one import PhaseOneConfig, PhaseOneReport, run_phase_one
+from copilot_agent.sandbox_backend import DEFAULT_DOCKER_IMAGE
 
 PhaseOneRunner = Callable[[PhaseOneConfig], Awaitable[PhaseOneReport]]
 
@@ -21,6 +22,8 @@ class RunExecutionOptions:
     host_verify: bool = False
     sandbox_runtime_enabled: bool = True
     sandbox_python: str = "python3"
+    docker_image: str = DEFAULT_DOCKER_IMAGE
+    docker_exposed_ports: tuple[int, ...] = ()
     require_api_key: bool = True
 
 
@@ -111,4 +114,6 @@ class RunWorker:
             sandbox_backend=run.sandbox_backend,
             sandbox_runtime_enabled=options.sandbox_runtime_enabled,
             sandbox_python=options.sandbox_python,
+            docker_image=options.docker_image,
+            docker_exposed_ports=options.docker_exposed_ports,
         )

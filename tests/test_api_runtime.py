@@ -19,6 +19,8 @@ def test_api_runtime_config_reads_worker_env(tmp_path: Path) -> None:
         "COPILOT_WORKER_HOST_VERIFY": "yes",
         "COPILOT_SANDBOX_RUNTIME_ENABLED": "0",
         "COPILOT_SANDBOX_PYTHON": "python3.13",
+        "COPILOT_DOCKER_IMAGE": "copilot-python:latest",
+        "COPILOT_DOCKER_EXPOSED_PORTS": "8000,5173",
         "COPILOT_WORKER_REQUIRE_API_KEY": "no",
     }
 
@@ -33,6 +35,8 @@ def test_api_runtime_config_reads_worker_env(tmp_path: Path) -> None:
     assert config.worker_options.host_verify is True
     assert config.worker_options.sandbox_runtime_enabled is False
     assert config.worker_options.sandbox_python == "python3.13"
+    assert config.worker_options.docker_image == "copilot-python:latest"
+    assert config.worker_options.docker_exposed_ports == (8000, 5173)
     assert config.worker_options.require_api_key is False
 
 
@@ -55,6 +59,8 @@ def test_create_app_from_env_exposes_runtime_config(
     assert runtime_config["auto_start_background_worker"] is True
     assert runtime_config["worker_test_cmd"] == "python -m pytest tests"
     assert runtime_config["worker_require_api_key"] is False
+    assert runtime_config["docker_image"] == "python:3.13-slim"
+    assert runtime_config["docker_exposed_ports"] == []
     assert worker_status["running"] is True
 
 
@@ -68,5 +74,11 @@ def test_api_runtime_config_rejects_invalid_env() -> None:
     with pytest.raises(ValueError, match="COPILOT_API_AUTO_START_WORKER"):
         ApiRuntimeConfig.from_env(
             env={"COPILOT_API_AUTO_START_WORKER": "sometimes"},
+            load_env=False,
+        )
+
+    with pytest.raises(ValueError, match="Docker exposed ports"):
+        ApiRuntimeConfig.from_env(
+            env={"COPILOT_DOCKER_EXPOSED_PORTS": "abc"},
             load_env=False,
         )

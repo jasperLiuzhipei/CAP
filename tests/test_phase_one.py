@@ -169,6 +169,26 @@ def test_validate_config_errors(tmp_path: Path) -> None:
                 sandbox_backend="space_station",
             )
         )
+    with pytest.raises(ValueError, match="Docker image"):
+        validate_config(
+            PhaseOneConfig(
+                repo=repo,
+                task="ok",
+                model_config=model_config,
+                sandbox_backend="docker",
+                docker_image=" ",
+            )
+        )
+    with pytest.raises(ValueError, match="between"):
+        validate_config(
+            PhaseOneConfig(
+                repo=repo,
+                task="ok",
+                model_config=model_config,
+                sandbox_backend="docker",
+                docker_exposed_ports=(70000,),
+            )
+        )
 
 
 def test_build_prompt_for_strategies_and_memory(tmp_path: Path) -> None:

@@ -15,7 +15,13 @@ from typing import Any, Literal
 
 from .memory import append_run_memory, load_memory_text, resolve_memory_path
 from .model_config import DEFAULT_OPENAI_MODEL, ResolvedModelConfig, resolve_model_config
-from .sandbox_backend import get_sandbox_backend_adapter, validate_sandbox_backend
+from .sandbox_backend import (
+    DEFAULT_DOCKER_IMAGE,
+    SandboxBackendRunOptions,
+    get_sandbox_backend_adapter,
+    validate_sandbox_backend,
+    validate_sandbox_backend_run_options,
+)
 
 DEFAULT_MODEL = DEFAULT_OPENAI_MODEL
 DEFAULT_WORKFLOW_NAME = "Copilot phase-one local coding task"
@@ -59,6 +65,8 @@ class PhaseOneConfig:
     sandbox_backend: str = "unix_local"
     sandbox_runtime_enabled: bool = True
     sandbox_python: str = "python3"
+    docker_image: str = DEFAULT_DOCKER_IMAGE
+    docker_exposed_ports: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -128,6 +136,12 @@ def validate_config(config: PhaseOneConfig) -> None:
     if config.max_turns < 1:
         raise ValueError("max_turns must be at least 1.")
     validate_sandbox_backend(config.sandbox_backend)
+    validate_sandbox_backend_run_options(
+        SandboxBackendRunOptions(
+            docker_image=config.docker_image,
+            docker_exposed_ports=config.docker_exposed_ports,
+        )
+    )
 
 
 def build_phase_one_prompt(config: PhaseOneConfig) -> str:
@@ -1013,7 +1027,15 @@ async def run_phase_one(config: PhaseOneConfig) -> PhaseOneReport:  # pragma: no
     backend = get_sandbox_backend_adapter(config.sandbox_backend)
     agent = _build_agent(config, sdk)
     before_snapshot = _snapshot_local_tree(config.repo)
-    sandbox_session = await backend.create_session(sdk, manifest=agent.default_manifest)
+    backend_options = SandboxBackendRunOptions(
+        docker_image=config.docker_image,
+        docker_exposed_ports=config.docker_exposed_ports,
+    )
+    sandbox_session = await backend.create_session(
+        sdk,
+        manifest=agent.default_manifest,
+        options=backend_options,
+    )
     sandbox = sandbox_session.sandbox
     run_id = datetime.now(UTC).strftime("run_%Y%m%d_%H%M%S_%f")
 

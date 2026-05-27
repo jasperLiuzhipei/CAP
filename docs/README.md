@@ -28,7 +28,8 @@ copilot_agent/
 │   ├── 18-phase-two-sandbox-runtime.md
 │   ├── 19-phase-two-api-ai-run.md
 │   ├── 20-phase-two-web-ui-sandbox-backends.md
-│   └── 21-phase-three-sandbox-backend-protocol.md
+│   ├── 21-phase-three-sandbox-backend-protocol.md
+│   └── 22-phase-three-docker-sandbox-backend.md
 ├── examples/
 │   └── sample_repo/
 └── src/
@@ -58,6 +59,7 @@ copilot_agent/
 19. [Phase 2 API AI Run](19-phase-two-api-ai-run.md)
 20. [Phase 2 Web UI and Sandbox Backends](20-phase-two-web-ui-sandbox-backends.md)
 21. [Phase 3 Sandbox Backend Protocol](21-phase-three-sandbox-backend-protocol.md)
+22. [Phase 3 Docker Sandbox Backend](22-phase-three-docker-sandbox-backend.md)
 
 ## 核心技术判断
 

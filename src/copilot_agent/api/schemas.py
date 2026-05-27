@@ -16,7 +16,11 @@ from copilot_agent.backend.models import (
     ToolCall,
 )
 from copilot_agent.backend.service import ToolReview
-from copilot_agent.sandbox_backend import SandboxBackendSpec
+from copilot_agent.sandbox_backend import (
+    DEFAULT_DOCKER_IMAGE,
+    SandboxBackendSpec,
+    parse_docker_exposed_ports,
+)
 from copilot_agent.worker import BackgroundWorkerStatus, RunExecutionOptions
 
 
@@ -65,9 +69,14 @@ class RunExecute(BaseModel):
     host_verify: bool = False
     sandbox_runtime_enabled: bool = True
     sandbox_python: str = "python3"
+    docker_image: str = DEFAULT_DOCKER_IMAGE
+    docker_exposed_ports: list[int] = Field(default_factory=list)
     require_api_key: bool = True
 
     def to_options(self) -> RunExecutionOptions:
+        docker_exposed_ports = parse_docker_exposed_ports(
+            ",".join(str(port) for port in self.docker_exposed_ports)
+        )
         return RunExecutionOptions(
             test_cmd=self.test_cmd,
             max_turns=self.max_turns,
@@ -76,6 +85,8 @@ class RunExecute(BaseModel):
             host_verify=self.host_verify,
             sandbox_runtime_enabled=self.sandbox_runtime_enabled,
             sandbox_python=self.sandbox_python,
+            docker_image=self.docker_image,
+            docker_exposed_ports=docker_exposed_ports,
             require_api_key=self.require_api_key,
         )
 
@@ -103,6 +114,8 @@ class RuntimeConfigResponse(BaseModel):
     worker_require_api_key: bool
     sandbox_runtime_enabled: bool
     sandbox_python: str
+    docker_image: str
+    docker_exposed_ports: list[int]
 
     @classmethod
     def from_worker_options(
@@ -124,6 +137,8 @@ class RuntimeConfigResponse(BaseModel):
             worker_require_api_key=options.require_api_key,
             sandbox_runtime_enabled=options.sandbox_runtime_enabled,
             sandbox_python=options.sandbox_python,
+            docker_image=options.docker_image,
+            docker_exposed_ports=list(options.docker_exposed_ports),
         )
 
 
