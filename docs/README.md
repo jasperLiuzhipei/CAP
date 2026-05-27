@@ -19,7 +19,10 @@ copilot_agent/
 │   ├── 09-openai-agents-reading-notes.md
 │   ├── 10-implementation-blueprint.md
 │   ├── 11-phase-one-local-cli.md
-│   └── 12-model-provider-env-design.md
+│   ├── 12-model-provider-env-design.md
+│   ├── 13-phase-two-backend-foundation.md
+│   ├── 14-phase-two-api-layer.md
+│   └── 15-phase-two-run-worker.md
 ├── examples/
 │   └── sample_repo/
 └── src/
@@ -40,6 +43,9 @@ copilot_agent/
 10. [实现蓝图](10-implementation-blueprint.md)
 11. [Phase 1 Local Sandbox CLI](11-phase-one-local-cli.md)
 12. [Model Provider Env 设计](12-model-provider-env-design.md)
+13. [Phase 2 Backend Control Plane Foundation](13-phase-two-backend-foundation.md)
+14. [Phase 2 API Layer](14-phase-two-api-layer.md)
+15. [Phase 2 Run Worker](15-phase-two-run-worker.md)
 
 ## 核心技术判断
 
