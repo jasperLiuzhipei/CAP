@@ -13,6 +13,7 @@ from copilot_agent.backend.models import Artifact, RunEvent
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
 from copilot_agent.model_config import resolve_model_config
+from copilot_agent.sandbox_backend import list_sandbox_backends
 from copilot_agent.worker import BackgroundRunWorker, RunWorker
 
 from .schemas import (
@@ -29,11 +30,13 @@ from .schemas import (
     RunFinish,
     RunResponse,
     RuntimeConfigResponse,
+    SandboxBackendResponse,
     ToolCallResponse,
     ToolReviewCreate,
     ToolReviewResponse,
     WorkerStatusResponse,
 )
+from .web import build_web_router
 
 TERMINAL_RUN_STATUSES = {"cancelled", "failed", "succeeded"}
 
@@ -69,6 +72,7 @@ def create_app(
         "auto_start_background_worker": auto_start_background_worker,
     }
 
+    app.include_router(build_web_router())
     app.include_router(_build_router())
     return app
 
@@ -130,6 +134,13 @@ def _build_router():
             runtime_config=dict(runtime_config),
             options=background_worker.default_options,
         )
+
+    @router.get("/sandbox/backends", response_model=list[SandboxBackendResponse])
+    def list_available_sandbox_backends() -> list[SandboxBackendResponse]:
+        return [
+            SandboxBackendResponse.from_domain(backend)
+            for backend in list_sandbox_backends()
+        ]
 
     @router.post(
         "/projects",

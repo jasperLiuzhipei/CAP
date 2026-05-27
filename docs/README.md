@@ -26,7 +26,8 @@ copilot_agent/
 │   ├── 16-phase-two-run-events.md
 │   ├── 17-phase-two-async-worker.md
 │   ├── 18-phase-two-sandbox-runtime.md
-│   └── 19-phase-two-api-ai-run.md
+│   ├── 19-phase-two-api-ai-run.md
+│   └── 20-phase-two-web-ui-sandbox-backends.md
 ├── examples/
 │   └── sample_repo/
 └── src/
@@ -54,6 +55,7 @@ copilot_agent/
 17. [Phase 2 Async Worker and Live Events](17-phase-two-async-worker.md)
 18. [Phase 2 Sandbox Runtime Provisioning](18-phase-two-sandbox-runtime.md)
 19. [Phase 2 API AI Run](19-phase-two-api-ai-run.md)
+20. [Phase 2 Web UI and Sandbox Backends](20-phase-two-web-ui-sandbox-backends.md)
 
 ## 核心技术判断
 
