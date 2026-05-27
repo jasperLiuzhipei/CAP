@@ -43,6 +43,7 @@ def test_backend_service_manages_project_run_and_tool_review(tmp_path: Path) -> 
     )
     decided = service.decide_approval(review.approval.id, approved=True, decided_by="jasper")
     finished = service.finish_run(run.id, "succeeded", summary="done")
+    events = service.list_events(run.id)
 
     assert started.status == "running"
     assert allowed.approval is None
@@ -53,6 +54,17 @@ def test_backend_service_manages_project_run_and_tool_review(tmp_path: Path) -> 
     assert service.store.get_run(run.id).status == "succeeded"
     assert decided.decision == "approved"
     assert finished.summary == "done"
+    assert [event.event_type for event in events] == [
+        "run.queued",
+        "run.started",
+        "tool.reviewed",
+        "tool.reviewed",
+        "approval.required",
+        "run.needs_approval",
+        "approval.decided",
+        "run.completed",
+    ]
+    assert events[3].payload["approval_id"] == review.approval.id
 
 
 def test_backend_service_rejects_invalid_project_or_run(tmp_path: Path) -> None:
@@ -115,11 +127,14 @@ def test_backend_service_ingests_phase_one_report_artifacts(tmp_path: Path) -> N
 
     run = service.ingest_phase_one_report(project.id, report)
     artifacts = service.store.list_artifacts(run.id)
+    events = service.list_events(run.id)
 
     assert run.status == "succeeded"
     assert run.diff_path == str(saved_dir / "diff.patch")
     assert len(artifacts) == 5
     assert {artifact.kind for artifact in artifacts} == {"diff", "log", "report", "summary"}
+    assert [event.event_type for event in events].count("artifact.created") == 5
+    assert events[0].event_type == "run.completed"
 
 
 def test_backend_service_ingest_requires_existing_project(tmp_path: Path) -> None:

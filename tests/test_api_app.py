@@ -108,8 +108,20 @@ def test_api_tool_review_approval_and_listing(tmp_path: Path) -> None:
 
     tool_calls = client.get(f"/api/v1/runs/{run['id']}/tool-calls").json()
     approvals = client.get(f"/api/v1/runs/{run['id']}/approvals").json()
+    events = client.get(f"/api/v1/runs/{run['id']}/events").json()
+    event_stream = client.get(f"/api/v1/runs/{run['id']}/events/stream")
     assert len(tool_calls) == 2
     assert approvals == [decided]
+    assert [event["event_type"] for event in events] == [
+        "run.queued",
+        "tool.reviewed",
+        "tool.reviewed",
+        "approval.required",
+        "run.needs_approval",
+        "approval.decided",
+    ]
+    assert event_stream.headers["content-type"].startswith("text/event-stream")
+    assert "event: approval.required" in event_stream.text
 
 
 def test_api_artifacts_and_diff_endpoint(tmp_path: Path) -> None:
@@ -175,11 +187,15 @@ def test_api_execute_run_uses_worker_and_returns_updated_run(tmp_path: Path) -> 
         },
     ).json()
     diff = client.get(f"/api/v1/runs/{run['id']}/diff").json()
+    events = client.get(f"/api/v1/runs/{run['id']}/events").json()
 
     assert executed["id"] == run["id"]
     assert executed["status"] == "succeeded"
     assert executed["summary"] == "done"
     assert diff["diff"] == "--- repo/a.py\n+++ repo/a.py\n"
+    assert "run.started" in [event["event_type"] for event in events]
+    assert "run.completed" in [event["event_type"] for event in events]
+    assert "artifact.created" in [event["event_type"] for event in events]
 
 
 def test_api_maps_invalid_requests_to_http_errors(tmp_path: Path) -> None:
@@ -204,6 +220,8 @@ def test_api_maps_invalid_requests_to_http_errors(tmp_path: Path) -> None:
         json={"tool_name": "shell.exec", "arguments": {}},
     ).status_code == 404
     assert client.get("/api/v1/runs/missing/artifacts").status_code == 404
+    assert client.get("/api/v1/runs/missing/events").status_code == 404
+    assert client.get("/api/v1/runs/missing/events/stream").status_code == 404
     assert client.get("/api/v1/runs/missing/diff").status_code == 404
     assert client.post("/api/v1/runs/missing/execute", json={}).status_code == 404
     assert client.post(

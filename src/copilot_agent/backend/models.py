@@ -16,6 +16,18 @@ ApprovalDecision = Literal["pending", "approved", "rejected"]
 ArtifactKind = Literal["report", "diff", "log", "summary", "memory", "other"]
 ToolAction = Literal["allow", "approval_required", "deny"]
 ToolCallStatus = Literal["allowed", "needs_approval", "denied", "completed", "failed"]
+RunEventType = Literal[
+    "run.queued",
+    "run.started",
+    "run.needs_approval",
+    "run.completed",
+    "run.failed",
+    "run.cancelled",
+    "tool.reviewed",
+    "approval.required",
+    "approval.decided",
+    "artifact.created",
+]
 
 
 def utc_now_iso() -> str:
@@ -85,4 +97,13 @@ class Artifact:
     kind: ArtifactKind
     path: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(frozen=True)
+class RunEvent:
+    id: str
+    run_id: str
+    event_type: RunEventType
+    payload: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=utc_now_iso)

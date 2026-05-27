@@ -13,6 +13,7 @@ from .models import (
     ApprovalDecision,
     Artifact,
     Project,
+    RunEvent,
     RunRecord,
     RunStatus,
     ToolCall,
@@ -84,6 +85,16 @@ SCHEMA: tuple[str, ...] = (
         kind TEXT NOT NULL,
         path TEXT NOT NULL,
         metadata_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS run_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL
     )
     """,
@@ -379,6 +390,31 @@ class SQLiteBackendStore:
             ).fetchall()
         return [_row_to_artifact(row) for row in rows]
 
+    def create_event(self, event: RunEvent) -> RunEvent:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO run_events (id, run_id, event_type, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    event.id,
+                    event.run_id,
+                    event.event_type,
+                    _json_dumps(event.payload),
+                    event.created_at,
+                ),
+            )
+        return event
+
+    def list_events(self, run_id: str) -> list[RunEvent]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM run_events WHERE run_id = ? ORDER BY sequence",
+                (run_id,),
+            ).fetchall()
+        return [_row_to_event(row) for row in rows]
+
 
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -458,5 +494,15 @@ def _row_to_artifact(row: sqlite3.Row) -> Artifact:
         kind=row["kind"],
         path=row["path"],
         metadata=_json_loads(row["metadata_json"]),
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_event(row: sqlite3.Row) -> RunEvent:
+    return RunEvent(
+        id=row["id"],
+        run_id=row["run_id"],
+        event_type=row["event_type"],
+        payload=_json_loads(row["payload_json"]),
         created_at=row["created_at"],
     )

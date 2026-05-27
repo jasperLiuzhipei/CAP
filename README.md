@@ -24,6 +24,7 @@
 - [Phase 2 Backend Control Plane Foundation](docs/13-phase-two-backend-foundation.md)
 - [Phase 2 API Layer](docs/14-phase-two-api-layer.md)
 - [Phase 2 Run Worker](docs/15-phase-two-run-worker.md)
+- [Phase 2 Run Events and Timeline](docs/16-phase-two-run-events.md)
 - [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
 
 ## 当前状态
@@ -35,6 +36,7 @@
 - 已开始第二阶段后端控制平面：Project、Run、ToolCall、Approval、Artifact、SQLite store、工具策略和 Phase 1 report 入库。
 - 已补齐第二阶段 API 层：FastAPI app、Project/Run/Approval/Artifact routes、diff 查询和 API 集成测试。
 - 已接通第二阶段本地 run worker：API 创建 queued run 后，可触发 `run_phase_one()` 执行并把结果写回原 run。
+- 已补齐第二阶段 run timeline：RunEvent 持久化、events API、SSE 格式事件流和关键生命周期事件。
 
 > Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
 
@@ -114,4 +116,11 @@ copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx
 curl -X POST http://127.0.0.1:8000/api/v1/runs/<run_id>/execute \
   -H "Content-Type: application/json" \
   -d '{"test_cmd":"python -m pytest tests","host_verify":true}'
+```
+
+查看 run timeline：
+
+```bash
+curl http://127.0.0.1:8000/api/v1/runs/<run_id>/events
+curl http://127.0.0.1:8000/api/v1/runs/<run_id>/events/stream
 ```

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
-from copilot_agent.backend.models import Artifact
+from copilot_agent.backend.models import Artifact, RunEvent
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
 from copilot_agent.worker import RunWorker
@@ -17,6 +19,7 @@ from .schemas import (
     ProjectCreate,
     ProjectResponse,
     RunCreate,
+    RunEventResponse,
     RunExecute,
     RunFinish,
     RunResponse,
@@ -308,6 +311,35 @@ def _build_router():
         return [ArtifactResponse.from_domain(artifact) for artifact in artifacts]
 
     @router.get(
+        "/runs/{run_id}/events",
+        response_model=list[RunEventResponse],
+        responses={404: {"description": "Run not found"}},
+    )
+    def list_events(
+        run_id: str,
+        service: CopilotBackendService = SERVICE_DEPENDENCY,
+    ) -> list[RunEventResponse]:
+        try:
+            events = service.list_events(run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return [RunEventResponse.from_domain(event) for event in events]
+
+    @router.get(
+        "/runs/{run_id}/events/stream",
+        responses={404: {"description": "Run not found"}},
+    )
+    def stream_events(
+        run_id: str,
+        service: CopilotBackendService = SERVICE_DEPENDENCY,
+    ) -> StreamingResponse:
+        try:
+            events = service.list_events(run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return StreamingResponse(_sse_events(events), media_type="text/event-stream")
+
+    @router.get(
         "/runs/{run_id}/diff",
         response_model=DiffResponse,
         responses={404: {"description": "Run or diff not found"}},
@@ -340,3 +372,9 @@ def _resolve_diff_path(diff_path: str | None, artifacts: list[Artifact]) -> Path
         if artifact.kind == "diff":
             return Path(artifact.path)
     return None
+
+
+def _sse_events(events: Iterable[RunEvent]) -> Iterable[str]:
+    for event in events:
+        payload = RunEventResponse.from_domain(event).model_dump_json()
+        yield f"event: {event.event_type}\ndata: {payload}\n\n"

@@ -22,7 +22,8 @@ copilot_agent/
 │   ├── 12-model-provider-env-design.md
 │   ├── 13-phase-two-backend-foundation.md
 │   ├── 14-phase-two-api-layer.md
-│   └── 15-phase-two-run-worker.md
+│   ├── 15-phase-two-run-worker.md
+│   └── 16-phase-two-run-events.md
 ├── examples/
 │   └── sample_repo/
 └── src/
@@ -46,6 +47,7 @@ copilot_agent/
 13. [Phase 2 Backend Control Plane Foundation](13-phase-two-backend-foundation.md)
 14. [Phase 2 API Layer](14-phase-two-api-layer.md)
 15. [Phase 2 Run Worker](15-phase-two-run-worker.md)
+16. [Phase 2 Run Events and Timeline](16-phase-two-run-events.md)
 
 ## 核心技术判断
 
