@@ -1,77 +1,80 @@
 # Copilot Agent Platform
 
-这是一个工程化 Copilot 平台的产品与技术规划工作区。当前目标是基于 OpenAI Agents SDK 设计并逐步实现一个具备 workspace 沙箱、memory 管理、多模型路由、工具审批和企业治理能力的 agentic copilot。
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](pyproject.toml)
+[![OpenAI Agents SDK](https://img.shields.io/badge/OpenAI%20Agents%20SDK-0.17.x-black)](https://github.com/openai/openai-agents-python)
+[![Tests](https://img.shields.io/badge/tests-90%20passed-brightgreen)](#quality-gate)
+[![Coverage](https://img.shields.io/badge/coverage-95%25%2B-brightgreen)](#quality-gate)
 
-## 目录
+一个基于 [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) 的工程化 Copilot 平台原型。
+
+目标不是再写一个简单聊天机器人，而是构建一个具备 **workspace sandbox、多模型路由、结构化 memory、run timeline、artifact 审计和 Web/API 控制平面** 的 agentic coding copilot。
+
+> 当前项目仍是原型阶段，适合学习、实验和展示 agent 平台工程能力。不要直接作为多租户生产系统使用。
+
+## Highlights
+
+| 能力 | 当前状态 |
+| --- | --- |
+| OpenAI Agents SDK runtime | 使用 `Runner`、`SandboxAgent`、SDK sandbox client 作为核心执行层 |
+| 多模型路由 | 支持 OpenAI 原生模型和 DeepSeek 等 OpenAI-compatible Chat Completions provider |
+| Workspace sandbox | 支持 `unix_local` 和 Docker sandbox backend |
+| Docker hardening | 支持项目镜像、网络策略、CPU/内存限制、命令超时和真实 Docker smoke test |
+| Memory v2 | `.copilot/memory.json` 结构化存储，`.copilot/memory.md` 人类可读索引 |
+| Web/API 控制平面 | FastAPI + 轻量 Web UI，可创建 project/run、查看 timeline/artifacts/diff |
+| 审计闭环 | 每次 run 保存 final output、diff、verification log、runtime log 和 artifact metadata |
+| 测试质量 | 单元测试、集成测试和覆盖率门槛保持在 95% 以上 |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    User["User / Web UI / CLI"]
+    API["FastAPI Control Plane"]
+    Worker["Run Worker"]
+    Agent["OpenAI Agents SDK Runner"]
+    Sandbox["Sandbox Backend"]
+    Memory["Memory v2"]
+    Store["SQLite Store"]
+    Artifacts["Run Artifacts"]
+
+    User --> API
+    User --> Worker
+    API --> Store
+    API --> Worker
+    Worker --> Memory
+    Worker --> Agent
+    Agent --> Sandbox
+    Sandbox --> Artifacts
+    Worker --> Store
+    Worker --> Artifacts
+```
+
+平台层负责工程能力：project/run 管理、模型配置、sandbox policy、memory、artifact、API 和 UI。
+
+Agents SDK 负责 agent runtime：模型调用、tool loop、sandbox agent 和 sandbox client 生命周期。
+
+## Repository Layout
 
 ```text
 .
-├── docs/                    # 产品与技术设计文档
-├── examples/                # 本地测试样例仓库
-└── src/                     # Phase 1 Copilot CLI 原型
+├── docs/                    # 产品需求、架构、阶段设计和实现笔记
+├── examples/sample_repo/     # 最小样例仓库，用于闭环验证
+├── docker/                   # Copilot sandbox 项目镜像
+├── scripts/                  # smoke test / 工具脚本
+├── src/copilot_agent/        # CLI、API、worker、memory、sandbox backend
+└── tests/                    # 单元测试与集成测试
 ```
 
-## 快速入口
-
-- [文档索引](docs/README.md)
-- [产品需求设计](docs/01-product-requirements.md)
-- [系统架构设计](docs/02-system-architecture.md)
-- [Workspace 沙箱设计](docs/03-workspace-sandbox.md)
-- [Memory 管理设计](docs/04-memory-management.md)
-- [实现蓝图](docs/10-implementation-blueprint.md)
-- [Phase 1 Local Sandbox CLI](docs/11-phase-one-local-cli.md)
-- [Model Provider Env 设计](docs/12-model-provider-env-design.md)
-- [Phase 2 Backend Control Plane Foundation](docs/13-phase-two-backend-foundation.md)
-- [Phase 2 API Layer](docs/14-phase-two-api-layer.md)
-- [Phase 2 Run Worker](docs/15-phase-two-run-worker.md)
-- [Phase 2 Run Events and Timeline](docs/16-phase-two-run-events.md)
-- [Phase 2 Async Worker and Live Events](docs/17-phase-two-async-worker.md)
-- [Phase 2 Sandbox Runtime Provisioning](docs/18-phase-two-sandbox-runtime.md)
-- [Phase 2 API AI Run](docs/19-phase-two-api-ai-run.md)
-- [Phase 2 Web UI and Sandbox Backends](docs/20-phase-two-web-ui-sandbox-backends.md)
-- [Phase 3 Sandbox Backend Protocol](docs/21-phase-three-sandbox-backend-protocol.md)
-- [Phase 3 Docker Sandbox Backend](docs/22-phase-three-docker-sandbox-backend.md)
-- [Memory v2: Claude Code Inspired Design](docs/23-memory-v2-claude-code-inspired.md)
-- [上游源码阅读笔记](docs/09-openai-agents-reading-notes.md)
-
-## 当前状态
-
-- 已建立第一版产品需求、架构、安全、memory、多模型和路线图文档。
-- 已创建阶段一最小 CLI skeleton：`copilot-agent run --repo ... --task ...`。
-- 已验证 DeepSeek 兼容 API 可运行 sample repo 修复任务，并新增函数工具版 `apply_patch` 兼容层，让 Chat Completions provider 更接近 OpenAI 原生 patch 流程。
-- 已补齐本地 Copilot MVP 闭环：项目初始化、project memory、历史 run 查看、sandbox diff 审计、手动应用 run patch。
-- 已开始第二阶段后端控制平面：Project、Run、ToolCall、Approval、Artifact、SQLite store、工具策略和 Phase 1 report 入库。
-- 已补齐第二阶段 API 层：FastAPI app、Project/Run/Approval/Artifact routes、diff 查询和 API 集成测试。
-- 已接通第二阶段本地 run worker：API 创建 queued run 后，可触发 `run_phase_one()` 执行并把结果写回原 run。
-- 已补齐第二阶段 run timeline：RunEvent 持久化、events API、SSE 格式事件流和关键生命周期事件。
-- 已补齐第二阶段后台 worker：可启动/停止后台队列，自动消费 queued run，并支持 `follow=true` 实时事件流。
-- 已补齐第二阶段 sandbox runtime provisioning：为 Python runtime 增加 path grants、health check、pytest sandbox-safe 命令归一化，解决 macOS sandbox 中 `encodings` 缺失导致 pytest 不稳定的问题。
-- 已补齐 API 级 AI run 入口：`copilot_agent.api.main:app` 读取 `.env`，可自动启动后台 worker，并让 `POST /runs` 复用 project 或 env 的默认模型路由。
-- 已补齐轻量 Web UI 控制台和 sandbox backend registry：浏览器可创建 project/run、查看 timeline/artifacts/diff，并暴露 `unix_local` 与 `docker` backend。
-- 已开始第三阶段 sandbox backend 抽象：定义 `SandboxBackend` protocol，并把现有 OpenAI Agents SDK `UnixLocalSandboxClient` 收口到 `UnixLocalSandboxBackend` adapter。
-- 已接入第三阶段 Docker sandbox backend：平台可通过 OpenAI Agents SDK `DockerSandboxClient` 创建容器 sandbox，并支持 Docker image 与 exposed ports 配置。
-
-> Note: `openai-agents-python/` 是本地阅读上游源码时使用的可选目录，不提交到本仓库。需要阅读源码时可单独 clone `https://github.com/openai/openai-agents-python`。
-
-## Phase 1 Dry Run
+## Quick Start
 
 ```bash
-PYTHONPATH=src python3 -m copilot_agent run \
-  --repo examples/sample_repo \
-  --task "Fix the discount calculation bug and run tests." \
-  --test-cmd "python -m pytest" \
-  --dry-run
-```
-
-## Local API Key
-
-真实运行前可以把 key 放进本地 `.env`：
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev,docker]'
 cp .env.example .env
 ```
 
-然后编辑 `.env`，例如低成本 DeepSeek 开发配置：
+配置一个模型 provider。低成本开发可以先用 DeepSeek：
 
 ```env
 COPILOT_MODEL_PROVIDER=deepseek
@@ -79,28 +82,37 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_API_KEY=<your-deepseek-api-key>
 ```
 
-`.env` 已经被 `.gitignore` 忽略。
+也可以使用 OpenAI 原生模型：
 
-## Local Copilot MVP
+```env
+COPILOT_MODEL_PROVIDER=openai
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=<your-openai-api-key>
+```
 
-初始化目标仓库的 Copilot 元数据：
+`.env` 已被 `.gitignore` 忽略，不会提交到仓库。
+
+## CLI Demo
+
+初始化样例项目：
 
 ```bash
 copilot-agent init --repo examples/sample_repo
 ```
 
-运行任务时，如果目标仓库存在 `.copilot/memory.md` 或 `.copilot/memory.json`，CLI 会自动启用 Memory v2。`.copilot/memory.json` 是结构化 source of truth，`.copilot/memory.md` 是人类可读索引和兼容入口。也可以显式开启：
+运行一次 coding copilot 任务：
 
 ```bash
 copilot-agent run \
   --repo examples/sample_repo \
-  --task "Fix the discount calculation bug and run tests." \
-  --test-cmd "python -m pytest" \
+  --task "Inspect the sample repo and run tests. Do not modify code unless tests fail." \
+  --test-cmd "python -m pytest tests" \
+  --provider deepseek \
   --memory \
   --host-verify
 ```
 
-查看和应用沙箱结果：
+查看和应用 sandbox diff：
 
 ```bash
 copilot-agent runs
@@ -109,64 +121,152 @@ copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx --check
 copilot-agent apply-run --run run_YYYYMMDD_HHMMSS_xxxxxx
 ```
 
-Memory v2 会按当前 task 检索相关 project facts 和 code preferences，只注入少量相关 memory、最近 run、冲突提示和压缩摘要。当前 repository 文件永远优先于 memory。
+`apply-run` 会先执行 `git apply --check`。只有 patch 能干净应用时，才会写回真实仓库。
 
-`apply-run` 会先执行 `git apply --check`，通过后才把保存的 sandbox diff 应用回真实仓库。
+## Docker Sandbox
 
-CLI 默认会开启 sandbox runtime provisioning：如果验证命令里出现宿主机绝对路径 Python，例如 `.venv/bin/python -m pytest tests`，sandbox 会自动改写为 sandbox-safe Python 命令，并给 Python 标准库和 venv roots 增加只读授权。
+构建项目专用 sandbox 镜像：
 
-如果仍然希望双保险，可以继续使用 `--host-verify`。它会把 sandbox diff 应用到一个临时仓库副本，再在沙箱外运行原始验证命令，不会直接修改真实仓库。
+```bash
+docker build -t copilot-agent-python:latest -f docker/copilot-python.Dockerfile .
+```
 
-## Local API
+使用 Docker backend 运行：
 
-启动第二阶段本地 API：
+```bash
+copilot-agent run \
+  --repo examples/sample_repo \
+  --task "Inspect the sample repo and run tests." \
+  --test-cmd "python -m pytest tests" \
+  --provider deepseek \
+  --sandbox-backend docker \
+  --docker-image copilot-agent-python:latest \
+  --docker-network none \
+  --docker-memory-limit 1g \
+  --docker-cpus 2
+```
+
+真实 Docker smoke test：
+
+```bash
+COPILOT_RUN_DOCKER_SMOKE=1 \
+COPILOT_DOCKER_IMAGE=copilot-agent-python:latest \
+COPILOT_DOCKER_NETWORK=none \
+COPILOT_DOCKER_MEMORY_LIMIT=1g \
+COPILOT_DOCKER_CPUS=2 \
+COPILOT_DOCKER_SMOKE_COMMAND="python -m pytest tests" \
+python -m pytest tests/test_docker_smoke.py
+```
+
+详细说明见 [Phase 3 Docker Sandbox Backend](docs/22-phase-three-docker-sandbox-backend.md)。
+
+## Local API And Web UI
+
+启动 API：
 
 ```bash
 PYTHONPATH=src .venv/bin/uvicorn copilot_agent.api.main:app --reload
 ```
 
-默认数据库路径是当前目录下的 `.copilot/control.sqlite`。API 文档入口是 `http://127.0.0.1:8000/docs`。
-Web UI 控制台入口是 `http://127.0.0.1:8000/` 或 `http://127.0.0.1:8000/app`。
+入口：
 
-如果希望 API 创建 run 后自动执行，可以在 `.env` 中配置：
+- Web UI: `http://127.0.0.1:8000/`
+- API docs: `http://127.0.0.1:8000/docs`
+- Runtime config: `http://127.0.0.1:8000/api/v1/runtime/config`
+
+自动执行 queued run 的 `.env` 示例：
 
 ```env
 COPILOT_API_AUTO_START_WORKER=true
 COPILOT_WORKER_TEST_CMD=python -m pytest tests
-COPILOT_WORKER_HOST_VERIFY=true
 COPILOT_WORKER_MEMORY_ENABLED=true
-# Optional Docker sandbox defaults.
-COPILOT_DOCKER_IMAGE=python:3.13-slim
-COPILOT_DOCKER_EXPOSED_PORTS=8000,5173
+COPILOT_WORKER_HOST_VERIFY=true
+COPILOT_DOCKER_IMAGE=copilot-agent-python:latest
+COPILOT_DOCKER_NETWORK=none
+COPILOT_DOCKER_MEMORY_LIMIT=1g
+COPILOT_DOCKER_CPUS=2
+COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS=120
 ```
 
-查看当前 API runtime：
+常用 API：
 
 ```bash
-curl http://127.0.0.1:8000/api/v1/runtime/config
-```
-
-本地触发一次 queued run 执行：
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/runs/<run_id>/execute \
-  -H "Content-Type: application/json" \
-  -d '{"test_cmd":"python -m pytest tests","host_verify":true}'
-```
-
-查看 run timeline：
-
-```bash
+curl http://127.0.0.1:8000/api/v1/worker/status
 curl http://127.0.0.1:8000/api/v1/runs/<run_id>/events
-curl http://127.0.0.1:8000/api/v1/runs/<run_id>/events/stream
+curl http://127.0.0.1:8000/api/v1/runs/<run_id>/artifacts
+curl http://127.0.0.1:8000/api/v1/runs/<run_id>/diff
 ```
 
-启动后台 worker，让新建 queued run 自动执行：
+## Memory v2
+
+Memory v2 借鉴了 Claude Code 的 memory 机制，但做成本项目当前阶段更适合的轻量文件实现：
+
+```text
+.copilot/
+  memory.json    # 结构化 source of truth
+  memory.md      # 人类可读索引和兼容入口
+```
+
+当前支持：
+
+- `project_facts`: 项目事实、背景、约束。
+- `code_preferences`: 代码和协作偏好。
+- `run_history`: 历史 run 摘要、改动文件、验证结果。
+- `conflicts`: 同标题 memory 内容变化时保留 old -> new 链路。
+- `compacted_run_summary`: 超过保留上限的 run history 会被压缩。
+
+Memory 读入不是全量注入，而是按当前 task 检索相关 project facts 和 code preferences。当前 repository 文件永远优先于 memory。
+
+设计说明见 [Memory v2: Claude Code Inspired Design](docs/23-memory-v2-claude-code-inspired.md)。
+
+## Quality Gate
+
+当前本地验证命令：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/worker/start
-curl "http://127.0.0.1:8000/api/v1/runs/<run_id>/events/stream?follow=true"
-curl -X POST http://127.0.0.1:8000/api/v1/worker/stop
+.venv/bin/python -m ruff check src tests scripts
+.venv/bin/python -m pytest tests --cov=src/copilot_agent --cov-report=term-missing
 ```
 
-完整 API 级 AI run 流程见 [Phase 2 API AI Run](docs/19-phase-two-api-ai-run.md)。
+最近一次 Memory v2 验证结果：
+
+```text
+90 passed
+Total coverage: 95.92%
+```
+
+## Documentation
+
+推荐阅读：
+
+- [Product Requirements](docs/01-product-requirements.md)
+- [System Architecture](docs/02-system-architecture.md)
+- [Workspace Sandbox](docs/03-workspace-sandbox.md)
+- [Memory Management](docs/04-memory-management.md)
+- [Model Provider Env Design](docs/12-model-provider-env-design.md)
+- [Phase 2 API AI Run](docs/19-phase-two-api-ai-run.md)
+- [Phase 2 Web UI and Sandbox Backends](docs/20-phase-two-web-ui-sandbox-backends.md)
+- [Phase 3 Sandbox Backend Protocol](docs/21-phase-three-sandbox-backend-protocol.md)
+- [Phase 3 Docker Sandbox Backend](docs/22-phase-three-docker-sandbox-backend.md)
+- [Memory v2](docs/23-memory-v2-claude-code-inspired.md)
+- [OpenAI Agents SDK Reading Notes](docs/09-openai-agents-reading-notes.md)
+
+完整文档索引见 [docs/README.md](docs/README.md)。
+
+## Roadmap
+
+- Memory Curator: 自动从 run summary 中抽取 project facts 和 code preferences。
+- Approval Policy: 高风险工具调用审批、策略记录和 UI review。
+- Rich Web UI: run detail、artifact preview、memory viewer/editor。
+- Provider Matrix: 更完整的 OpenAI、DeepSeek、Qwen、Volcano 等 provider 能力矩阵。
+- Production Sandbox: 更严格的资源配额、网络策略、依赖缓存和 CI smoke job。
+
+## Notes
+
+`openai-agents-python/` 和 `cc-haha-main/` 是本地阅读参考源码时使用的可选目录，不提交到本仓库。
+
+如果你想阅读上游 SDK，可以单独 clone：
+
+```bash
+git clone https://github.com/openai/openai-agents-python
+```
