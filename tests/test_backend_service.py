@@ -90,6 +90,15 @@ def test_backend_service_rejects_invalid_project_or_run(tmp_path: Path) -> None:
             model="gpt-5.5",
             tool_strategy="native",
         )
+    with pytest.raises(ValueError, match="planned"):
+        service.queue_run(
+            project_id=project.id,
+            task="Fix bug",
+            model_provider="openai",
+            model="gpt-5.5",
+            tool_strategy="native",
+            sandbox_backend="docker",
+        )
     with pytest.raises(FileNotFoundError, match="Run not found"):
         service.record_tool_decision(run_id="missing", tool_name="shell.exec", arguments={})
 

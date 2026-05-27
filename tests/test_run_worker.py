@@ -102,6 +102,7 @@ def test_run_worker_executes_queued_run_and_updates_existing_record(tmp_path: Pa
     assert config.task == "Fix bug"
     assert config.model_config.provider == "deepseek"
     assert config.model_config.tool_strategy == "compat_functions"
+    assert config.sandbox_backend == "unix_local"
     assert config.test_cmd == "pytest tests"
     assert not config.sandbox_runtime_enabled
     assert config.sandbox_python == "python3.13"

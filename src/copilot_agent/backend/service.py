@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from copilot_agent.phase_one import PhaseOneReport
+from copilot_agent.sandbox_backend import validate_sandbox_backend
 
 from .models import (
     Approval,
@@ -96,6 +97,7 @@ class CopilotBackendService:
             raise FileNotFoundError(f"Project not found: {project_id}")
         if not task.strip():
             raise ValueError("Run task must not be empty.")
+        validate_sandbox_backend(sandbox_backend)
 
         run = self.store.create_run(
             RunRecord(
@@ -314,6 +316,7 @@ class CopilotBackendService:
                     model_provider=report.model_provider,
                     model=report.model,
                     tool_strategy=report.tool_strategy,
+                    sandbox_backend=report.sandbox_backend,
                 )
             )
         else:

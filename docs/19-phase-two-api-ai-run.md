@@ -178,4 +178,6 @@ RunWorker -> PhaseOneConfig -> run_phase_one() -> SandboxAgent -> Runner.run()
 - 当前 API 还没有 Web UI。
 - 当前审批策略还没有接进真实 sandbox tool execution，只是先有 control-plane 数据模型。
 
-下一步建议做 Web UI 或更正式的 sandbox backend abstraction。
+Web UI 和 sandbox backend registry 已在
+[Phase 2 Web UI and Sandbox Backends](20-phase-two-web-ui-sandbox-backends.md)
+中补齐。下一步建议继续推进正式 `SandboxBackend` protocol 和 Docker backend。
