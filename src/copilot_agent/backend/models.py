@@ -26,6 +26,8 @@ RunEventType = Literal[
     "tool.reviewed",
     "approval.required",
     "approval.decided",
+    "sandbox.runtime_checked",
+    "verification.completed",
     "artifact.created",
 ]
 

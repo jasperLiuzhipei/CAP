@@ -117,7 +117,23 @@ copilot-agent apply-run --run run_20260521_123456_000000 --check
 copilot-agent apply-run --run run_20260521_123456_000000
 ```
 
-`--host-verify` 会把 sandbox diff 应用到临时 repo 副本，再在沙箱外运行验证命令。它用于解决本地 macOS sandbox 中系统 Python 或 Anaconda Python 被文件系统限制阻断的问题，同时仍然避免直接污染真实仓库。
+CLI 默认会开启 sandbox runtime provisioning。它会为 Python 标准库、venv root、base prefix 增加只读 path grants，并把宿主机绝对路径 Python 验证命令改写成 sandbox-safe command。
+
+例如：
+
+```bash
+/Users/me/project/.venv/bin/python -m pytest tests
+```
+
+会在 sandbox 内归一化为：
+
+```bash
+PYTEST_ADDOPTS="-p no:debugging ${PYTEST_ADDOPTS:-}" \
+PYTHONPATH="../.copilot-runtime/site:${PYTHONPATH:-}" \
+sh -c 'python3 -m pytest tests'
+```
+
+这解决了本地 macOS sandbox 中 `encodings` 缺失导致 pytest 无法稳定运行的问题。`--host-verify` 仍然可以作为双保险：它会把 sandbox diff 应用到临时 repo 副本，再在沙箱外运行原始验证命令，同时避免直接污染真实仓库。
 
 ## 当前边界
 
@@ -125,5 +141,5 @@ copilot-agent apply-run --run run_20260521_123456_000000
 - 还没有实现 approval policy，高风险命令控制会在阶段 3 做。
 - 还没有实现 Web UI、数据库、长期 memory。
 - 已有本地 project memory，但还不是向量库或跨项目检索。
-- 本地 macOS `UnixLocalSandboxClient` 可能无法运行系统 Python；此时优先使用 `--host-verify`，生产环境建议迁移到 Docker sandbox 或 hosted sandbox。
+- 本地 macOS `UnixLocalSandboxClient` 已支持 Python runtime grants 和 pytest 命令归一化；生产环境仍建议迁移到 Docker sandbox 或 hosted sandbox。
 - 如果输入目录不是 git repo，CLI 会在 sandbox 副本里初始化临时 git baseline，方便收集 diff；默认不会修改宿主机目录，只有执行 `apply-run` 才会应用修改。

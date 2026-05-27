@@ -100,6 +100,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "the sandbox diff. Useful when local sandbox runtimes cannot run Python."
         ),
     )
+    run.add_argument(
+        "--sandbox-python",
+        default="python3",
+        help="Python command to use inside the sandbox after runtime provisioning.",
+    )
+    run.add_argument(
+        "--no-sandbox-runtime",
+        action="store_true",
+        help="Disable sandbox Python runtime grants and verification command normalization.",
+    )
     run.add_argument("--max-turns", default=32, type=int, help="Maximum agent turns.")
     run.add_argument(
         "--output-dir",
@@ -179,6 +189,8 @@ def _config_from_args(
         ),
         memory_path=args.memory_path,
         host_verify=args.host_verify,
+        sandbox_runtime_enabled=not args.no_sandbox_runtime,
+        sandbox_python=args.sandbox_python,
     )
 
 
@@ -200,6 +212,11 @@ async def _run(args: argparse.Namespace) -> int:
             else "disabled",
         )
         print("Host verification:", "enabled" if config.host_verify else "disabled")
+        print(
+            "Sandbox runtime:",
+            "enabled" if config.sandbox_runtime_enabled else "disabled",
+            f"({config.sandbox_python})",
+        )
         print()
         print("Generated agent prompt:\n")
         print(build_phase_one_prompt(config))
@@ -212,6 +229,20 @@ async def _run(args: argparse.Namespace) -> int:
     print(report.git_status or "(clean)")
     print("\n=== Diff ===")
     print(report.diff or "(no diff)")
+    if report.sandbox_runtime is not None:
+        print("\n=== Sandbox runtime ===")
+        print(f"python={report.sandbox_runtime.python_command}")
+        if report.sandbox_runtime.sandbox_test_cmd:
+            print(f"sandbox_test_cmd={report.sandbox_runtime.sandbox_test_cmd}")
+        for note in report.sandbox_runtime.notes:
+            print(f"- {note}")
+        if report.sandbox_runtime.python_check is not None:
+            print(f"python_check_exit={report.sandbox_runtime.python_check.exit_code}")
+        if report.sandbox_runtime.dependency_install is not None:
+            print(
+                "dependency_install_exit="
+                f"{report.sandbox_runtime.dependency_install.exit_code}"
+            )
     if report.verification is not None:
         print("\n=== Verification ===")
         print(f"$ {report.verification.command}")
