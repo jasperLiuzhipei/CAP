@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from copilot_agent.api import create_app
+from copilot_agent.api.app import get_background_worker, get_service, get_worker
 from copilot_agent.backend.models import Artifact
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
 from copilot_agent.phase_one import PhaseOneConfig, PhaseOneReport
-from copilot_agent.worker import RunWorker
+from copilot_agent.worker import BackgroundRunWorker, RunExecutionOptions, RunWorker
 
 
 def build_client(tmp_path: Path) -> tuple[TestClient, CopilotBackendService]:
@@ -198,6 +202,138 @@ def test_api_execute_run_uses_worker_and_returns_updated_run(tmp_path: Path) -> 
     assert "artifact.created" in [event["event_type"] for event in events]
 
 
+def test_api_background_worker_dispatch_and_follow_stream(tmp_path: Path) -> None:
+    service = CopilotBackendService(SQLiteBackendStore(tmp_path / "control.sqlite"))
+
+    async def fake_runner(config: PhaseOneConfig) -> PhaseOneReport:
+        saved_dir = tmp_path / "runs" / "sdk_background_run"
+        saved_dir.mkdir(parents=True)
+        (saved_dir / "report.json").write_text("{}", encoding="utf-8")
+        (saved_dir / "final.md").write_text("background done", encoding="utf-8")
+        (saved_dir / "diff.patch").write_text("--- repo/a.py\n+++ repo/a.py\n", encoding="utf-8")
+        return PhaseOneReport(
+            run_id="sdk_background_run",
+            repo=str(config.repo),
+            task=config.task,
+            model=config.model_config.model,
+            model_provider=config.model_config.provider,
+            model_transport=config.model_config.transport,
+            tool_strategy=config.model_config.tool_strategy,
+            model_base_url=config.model_config.base_url,
+            prompt="prompt",
+            final_output="background done",
+            diff="--- repo/a.py\n+++ repo/a.py\n",
+            saved_dir=str(saved_dir),
+        )
+
+    background_worker = BackgroundRunWorker(
+        RunWorker(service, runner=fake_runner),
+        default_options=RunExecutionOptions(require_api_key=False),
+    )
+    app = create_app(service=service, background_worker=background_worker)
+    with TestClient(app) as client:
+        project = create_project(client, tmp_path)
+        run = create_run(client, str(project["id"]))
+
+        assert client.get("/api/v1/worker/status").json()["running"] is False
+        dispatch = client.post(
+            f"/api/v1/runs/{run['id']}/dispatch",
+            json={"output_dir": str(tmp_path / "runs"), "require_api_key": False},
+        ).json()
+        assert dispatch["run"]["id"] == run["id"]
+        assert dispatch["worker"]["running"] is True
+
+        final_run = wait_for_run_status(client, str(run["id"]), "succeeded")
+        stream = client.get(
+            f"/api/v1/runs/{run['id']}/events/stream"
+            "?follow=true&idle_timeout_seconds=0.1&poll_interval_seconds=0.01"
+        )
+        stop_status = client.post("/api/v1/worker/stop").json()
+
+    assert final_run["summary"] == "background done"
+    assert "event: run.started" in stream.text
+    assert "event: run.completed" in stream.text
+    assert stop_status["running"] is False
+
+
+def test_api_background_worker_auto_dispatches_new_runs_when_running(tmp_path: Path) -> None:
+    service = CopilotBackendService(SQLiteBackendStore(tmp_path / "control.sqlite"))
+
+    async def fake_runner(config: PhaseOneConfig) -> PhaseOneReport:
+        saved_dir = tmp_path / "runs" / "auto"
+        saved_dir.mkdir(parents=True)
+        (saved_dir / "report.json").write_text("{}", encoding="utf-8")
+        (saved_dir / "final.md").write_text("auto done", encoding="utf-8")
+        (saved_dir / "diff.patch").write_text("", encoding="utf-8")
+        return PhaseOneReport(
+            run_id="auto",
+            repo=str(config.repo),
+            task=config.task,
+            model=config.model_config.model,
+            model_provider=config.model_config.provider,
+            model_transport=config.model_config.transport,
+            tool_strategy=config.model_config.tool_strategy,
+            model_base_url=config.model_config.base_url,
+            prompt="prompt",
+            final_output="auto done",
+            saved_dir=str(saved_dir),
+        )
+
+    background_worker = BackgroundRunWorker(
+        RunWorker(service, runner=fake_runner),
+        default_options=RunExecutionOptions(require_api_key=False),
+    )
+    app = create_app(service=service, background_worker=background_worker)
+    with TestClient(app) as client:
+        project = create_project(client, tmp_path)
+
+        client.post("/api/v1/worker/start")
+        run = create_run(client, str(project["id"]))
+        final_run = wait_for_run_status(client, str(run["id"]), "succeeded")
+        client.post("/api/v1/worker/stop")
+
+    assert final_run["summary"] == "auto done"
+
+
+def test_api_auto_start_background_worker_and_idle_follow_stream(tmp_path: Path) -> None:
+    service = CopilotBackendService(SQLiteBackendStore(tmp_path / "control.sqlite"))
+    app = create_app(service=service, auto_start_background_worker=True)
+
+    with TestClient(app) as client:
+        project = create_project(client, tmp_path)
+        run = create_run(client, str(project["id"]))
+        stream = client.get(
+            f"/api/v1/runs/{run['id']}/events/stream"
+            "?follow=true&idle_timeout_seconds=0.1&poll_interval_seconds=0.01"
+        )
+        status = client.get("/api/v1/worker/status").json()
+
+    assert status["running"] is True
+    assert "event: run.queued" in stream.text
+
+
+def test_api_maps_conflicting_dispatch_to_409(tmp_path: Path) -> None:
+    client, _ = build_client(tmp_path)
+    project = create_project(client, tmp_path)
+    run = create_run(client, str(project["id"]))
+
+    client.post(f"/api/v1/runs/{run['id']}/start")
+    response = client.post(f"/api/v1/runs/{run['id']}/dispatch", json={})
+
+    assert response.status_code == 409
+
+
+def test_api_dependency_getters_require_configured_state() -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+
+    with pytest.raises(RuntimeError, match="backend service"):
+        get_service(request)
+    with pytest.raises(RuntimeError, match="run worker"):
+        get_worker(request)
+    with pytest.raises(RuntimeError, match="background worker"):
+        get_background_worker(request)
+
+
 def test_api_maps_invalid_requests_to_http_errors(tmp_path: Path) -> None:
     client, _ = build_client(tmp_path)
 
@@ -224,7 +360,24 @@ def test_api_maps_invalid_requests_to_http_errors(tmp_path: Path) -> None:
     assert client.get("/api/v1/runs/missing/events/stream").status_code == 404
     assert client.get("/api/v1/runs/missing/diff").status_code == 404
     assert client.post("/api/v1/runs/missing/execute", json={}).status_code == 404
+    assert client.post("/api/v1/runs/missing/dispatch", json={}).status_code == 404
     assert client.post(
         "/api/v1/approvals/missing/decide",
         json={"approved": False, "decided_by": "jasper"},
     ).status_code == 404
+
+
+def wait_for_run_status(
+    client: TestClient,
+    run_id: str,
+    expected_status: str,
+    *,
+    timeout_seconds: float = 1.0,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        run = client.get(f"/api/v1/runs/{run_id}").json()
+        if run["status"] == expected_status:
+            return run
+        time.sleep(0.01)
+    raise AssertionError(f"Run {run_id} did not reach {expected_status}.")

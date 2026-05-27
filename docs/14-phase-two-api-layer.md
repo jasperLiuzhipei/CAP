@@ -49,9 +49,18 @@ GET /api/v1/runs/{run_id}
 POST /api/v1/runs/{run_id}/start
 POST /api/v1/runs/{run_id}/finish
 POST /api/v1/runs/{run_id}/execute
+POST /api/v1/runs/{run_id}/dispatch
 GET /api/v1/runs/{run_id}/events
 GET /api/v1/runs/{run_id}/events/stream
 GET /api/v1/runs/{run_id}/diff
+```
+
+### Worker
+
+```http
+GET /api/v1/worker/status
+POST /api/v1/worker/start
+POST /api/v1/worker/stop
 ```
 
 ### Tool Calls and Approvals

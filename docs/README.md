@@ -23,7 +23,8 @@ copilot_agent/
 │   ├── 13-phase-two-backend-foundation.md
 │   ├── 14-phase-two-api-layer.md
 │   ├── 15-phase-two-run-worker.md
-│   └── 16-phase-two-run-events.md
+│   ├── 16-phase-two-run-events.md
+│   └── 17-phase-two-async-worker.md
 ├── examples/
 │   └── sample_repo/
 └── src/
@@ -48,6 +49,7 @@ copilot_agent/
 14. [Phase 2 API Layer](14-phase-two-api-layer.md)
 15. [Phase 2 Run Worker](15-phase-two-run-worker.md)
 16. [Phase 2 Run Events and Timeline](16-phase-two-run-events.md)
+17. [Phase 2 Async Worker and Live Events](17-phase-two-async-worker.md)
 
 ## 核心技术判断
 
