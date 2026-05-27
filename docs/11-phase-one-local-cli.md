@@ -123,7 +123,7 @@ copilot-agent apply-run --run run_20260521_123456_000000
 
 - 这是本地 PoC，默认使用 `UnixLocalSandboxClient`。
 - 还没有实现 approval policy，高风险命令控制会在阶段 3 做。
-- 还没有实现 Web UI、数据库、长期 memory。
-- 已有本地 project memory，但还不是向量库或跨项目检索。
+- 已有本地文件型 Memory v2，使用 `.copilot/memory.json` 存结构化 memory，并用 `.copilot/memory.md` 作为人类可读索引。
+- Memory v2 支持 task-based 轻量检索、run history 压缩和同标题 memory 冲突记录，但还不是向量库或跨项目检索。
 - 本地 macOS `UnixLocalSandboxClient` 可能无法运行系统 Python；此时优先使用 `--host-verify`，生产环境建议迁移到 Docker sandbox 或 hosted sandbox。
 - 如果输入目录不是 git repo，CLI 会在 sandbox 副本里初始化临时 git baseline，方便收集 diff；默认不会修改宿主机目录，只有执行 `apply-run` 才会应用修改。
