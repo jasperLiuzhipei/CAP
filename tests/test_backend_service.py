@@ -53,6 +53,7 @@ def test_backend_service_manages_project_run_and_tool_review(tmp_path: Path) -> 
     assert review.tool_call.approval_id == review.approval.id
     assert service.store.get_run(run.id).status == "succeeded"
     assert decided.decision == "approved"
+    assert service.list_tool_calls(run.id)[1].status == "completed"
     assert finished.summary == "done"
     assert [event.event_type for event in events] == [
         "run.queued",
@@ -175,6 +176,95 @@ def test_backend_service_ingests_phase_one_report_artifacts(tmp_path: Path) -> N
         "run.completed",
     ]
     assert [event.event_type for event in events].count("verification.completed") == 2
+
+
+def test_backend_service_ingests_report_tool_calls_as_approvals(tmp_path: Path) -> None:
+    service = build_service(tmp_path)
+    project = service.create_project(name="Sample", repo_path=tmp_path / "repo")
+    report = PhaseOneReport(
+        run_id="run_with_tool_calls",
+        repo=str(tmp_path / "repo"),
+        task="Edit code",
+        model="deepseek-v4-flash",
+        model_provider="deepseek",
+        model_transport="chat_completions",
+        tool_strategy="compat_functions",
+        model_base_url="https://api.deepseek.com",
+        prompt="prompt",
+        final_output="patched",
+        tool_calls=[
+            {"name": "shell_call", "arguments": "rg sample"},
+            {"name": "git_call", "arguments": "push origin feature"},
+            {"name": "apply_patch", "arguments": {"patch": "*** Begin Patch"}},
+        ],
+    )
+
+    run = service.ingest_phase_one_report(project.id, report)
+    tool_calls = service.list_tool_calls(run.id)
+    approvals = service.list_approvals(run.id)
+    events = service.list_events(run.id)
+
+    assert run.status == "needs_approval"
+    assert [tool_call.status for tool_call in tool_calls] == [
+        "allowed",
+        "needs_approval",
+        "needs_approval",
+    ]
+    assert len(approvals) == 2
+    assert {approval.tool_name for approval in approvals} == {"apply_patch", "git.exec"}
+    assert "approval.required" in [event.event_type for event in events]
+    assert events[-1].event_type == "run.needs_approval"
+
+
+def test_backend_service_marks_policy_violation_report_as_failed(tmp_path: Path) -> None:
+    service = build_service(tmp_path)
+    project = service.create_project(name="Sample", repo_path=tmp_path / "repo")
+    report = PhaseOneReport(
+        run_id="run_with_violation",
+        repo=str(tmp_path / "repo"),
+        task="Dangerous command",
+        model="gpt-5.5",
+        model_provider="openai",
+        model_transport="native",
+        tool_strategy="native",
+        model_base_url=None,
+        prompt="prompt",
+        final_output="ran dangerous command",
+        tool_calls=[{"name": "shell.exec", "arguments": {"cmd": "rm -rf /tmp/example"}}],
+    )
+
+    run = service.ingest_phase_one_report(project.id, report)
+    events = service.list_events(run.id)
+
+    assert run.status == "failed"
+    assert service.list_tool_calls(run.id)[0].status == "denied"
+    assert "policy.violation" in [event.event_type for event in events]
+
+
+def test_backend_service_keeps_failed_report_failed_even_with_pending_approval(
+    tmp_path: Path,
+) -> None:
+    service = build_service(tmp_path)
+    project = service.create_project(name="Sample", repo_path=tmp_path / "repo")
+    report = PhaseOneReport(
+        run_id="run_failed_with_approval",
+        repo=str(tmp_path / "repo"),
+        task="Patch but tests fail",
+        model="deepseek-v4-flash",
+        model_provider="deepseek",
+        model_transport="chat_completions",
+        tool_strategy="compat_functions",
+        model_base_url="https://api.deepseek.com",
+        prompt="prompt",
+        final_output="patched but failed",
+        tool_calls=[{"name": "apply_patch_call", "arguments": "*** Begin Patch"}],
+        verification=CommandResult("pytest", 1, "", "failed"),
+    )
+
+    run = service.ingest_phase_one_report(project.id, report)
+
+    assert run.status == "failed"
+    assert service.list_approvals(run.id)[0].tool_name == "apply_patch"
 
 
 def test_backend_service_ingest_requires_existing_project(tmp_path: Path) -> None:

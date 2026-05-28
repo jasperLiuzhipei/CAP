@@ -2,8 +2,8 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](pyproject.toml)
 [![OpenAI Agents SDK](https://img.shields.io/badge/OpenAI%20Agents%20SDK-0.17.x-black)](https://github.com/openai/openai-agents-python)
-[![Tests](https://img.shields.io/badge/tests-90%20passed-brightgreen)](#quality-gate)
-[![Coverage](https://img.shields.io/badge/coverage-95%25%2B-brightgreen)](#quality-gate)
+[![Tests](https://img.shields.io/badge/tests-97%20passed-brightgreen)](#quality-gate)
+[![Coverage](https://img.shields.io/badge/coverage-96%25%2B-brightgreen)](#quality-gate)
 
 一个基于 [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) 的工程化 Copilot 平台原型。
 
@@ -20,6 +20,7 @@
 | Workspace sandbox | 支持 `unix_local` 和 Docker sandbox backend |
 | Docker hardening | 支持项目镜像、网络策略、CPU/内存限制、命令超时和真实 Docker smoke test |
 | Memory v2 | `.copilot/memory.json` 结构化存储，`.copilot/memory.md` 人类可读索引 |
+| Tool policy + approvals | shell、apply_patch、git、network 统一策略分类，高风险操作进入审批 |
 | Web/API 控制平面 | FastAPI + 轻量 Web UI，可创建 project/run、查看 timeline/artifacts/diff |
 | 审计闭环 | 每次 run 保存 final output、diff、verification log、runtime log 和 artifact metadata |
 | 测试质量 | 单元测试、集成测试和覆盖率门槛保持在 95% 以上 |
@@ -192,6 +193,7 @@ COPILOT_SANDBOX_COMMAND_TIMEOUT_SECONDS=120
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/worker/status
+curl http://127.0.0.1:8000/api/v1/policy/rules
 curl http://127.0.0.1:8000/api/v1/runs/<run_id>/events
 curl http://127.0.0.1:8000/api/v1/runs/<run_id>/artifacts
 curl http://127.0.0.1:8000/api/v1/runs/<run_id>/diff
@@ -228,11 +230,11 @@ Memory 读入不是全量注入，而是按当前 task 检索相关 project fact
 .venv/bin/python -m pytest tests --cov=src/copilot_agent --cov-report=term-missing
 ```
 
-最近一次 Memory v2 验证结果：
+最近一次 Phase 4A 验证结果：
 
 ```text
-90 passed
-Total coverage: 95.92%
+97 passed
+Total coverage: 96.31%
 ```
 
 ## Documentation
@@ -249,6 +251,7 @@ Total coverage: 95.92%
 - [Phase 3 Sandbox Backend Protocol](docs/21-phase-three-sandbox-backend-protocol.md)
 - [Phase 3 Docker Sandbox Backend](docs/22-phase-three-docker-sandbox-backend.md)
 - [Memory v2](docs/23-memory-v2-claude-code-inspired.md)
+- [Tool Policy and Approvals](docs/24-phase-four-tool-policy-approvals.md)
 - [OpenAI Agents SDK Reading Notes](docs/09-openai-agents-reading-notes.md)
 
 完整文档索引见 [docs/README.md](docs/README.md)。
