@@ -21,6 +21,10 @@ from copilot_agent.backend.models import (
     ToolTraceItem,
 )
 from copilot_agent.backend.service import ToolReview
+from copilot_agent.model_registry import (
+    ModelCapabilityProfile,
+    ModelPricing,
+)
 from copilot_agent.sandbox_backend import (
     DEFAULT_DOCKER_IMAGE,
     DEFAULT_SANDBOX_COMMAND_TIMEOUT_SECONDS,
@@ -187,6 +191,51 @@ class SandboxBackendResponse(BaseModel):
             supports_path_grants=backend.supports_path_grants,
             supports_python_runtime_provisioning=backend.supports_python_runtime_provisioning,
             notes=backend.notes,
+        )
+
+
+class ModelPricingResponse(BaseModel):
+    input_usd_per_million_tokens: float
+    output_usd_per_million_tokens: float
+    source: str
+    source_url: str | None
+    updated_at: str
+
+    @classmethod
+    def from_domain(cls, pricing: ModelPricing) -> ModelPricingResponse:
+        return cls(**pricing.__dict__)
+
+
+class ModelCapabilityResponse(BaseModel):
+    provider: str
+    model: str
+    display_name: str
+    transport: str
+    tool_strategy: str
+    native_tools: str
+    function_tools: str
+    filesystem: str
+    compaction: str
+    hosted_tools: str
+    structured_outputs: str
+    context_window_tokens: int | None
+    cost_tier: str
+    stability: str
+    pricing: ModelPricingResponse | None
+    notes: list[str]
+
+    @classmethod
+    def from_domain(cls, profile: ModelCapabilityProfile) -> ModelCapabilityResponse:
+        return cls(
+            **{
+                **profile.__dict__,
+                "pricing": (
+                    ModelPricingResponse.from_domain(profile.pricing)
+                    if profile.pricing
+                    else None
+                ),
+                "notes": list(profile.notes),
+            }
         )
 
 

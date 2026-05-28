@@ -1,24 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from copilot_agent.model_registry import (
+    ModelPricing,
+    default_pricing_table,
+    get_model_pricing,
+)
+
 from .models import CostEstimate, RunEvent, TokenUsage
 
-
-@dataclass(frozen=True)
-class ModelPricing:
-    input_usd_per_million_tokens: float
-    output_usd_per_million_tokens: float
-    source: str = "default_estimate"
-
-
-DEFAULT_MODEL_PRICING: dict[tuple[str, str], ModelPricing] = {
-    ("openai", "gpt-4.1-mini"): ModelPricing(0.40, 1.60),
-    ("openai", "gpt-4o-mini"): ModelPricing(0.15, 0.60),
-    ("deepseek", "deepseek-chat"): ModelPricing(0.27, 1.10),
-}
+DEFAULT_MODEL_PRICING = default_pricing_table()
 
 TERMINAL_EVENTS = {"run.completed", "run.failed", "run.cancelled"}
 
@@ -55,8 +48,10 @@ def estimate_cost(
     usage: TokenUsage,
     pricing: dict[tuple[str, str], ModelPricing] | None = None,
 ) -> CostEstimate:
-    pricing_table = pricing or DEFAULT_MODEL_PRICING
-    model_pricing = pricing_table.get((provider.lower(), model.lower()))
+    if pricing is None:
+        model_pricing = get_model_pricing(provider, model)
+    else:
+        model_pricing = pricing.get((provider.lower(), model.lower()))
     if model_pricing is None:
         return CostEstimate(pricing_source="pricing_unavailable")
     if usage.input_tokens is None and usage.output_tokens is None:

@@ -67,6 +67,12 @@ def test_api_project_and_run_lifecycle(tmp_path: Path) -> None:
         backend["id"] == "unix_local" and backend["available"]
         for backend in sandbox_backends
     )
+    model_capabilities = client.get("/api/v1/models/capabilities?provider=deepseek").json()
+    assert {profile["model"] for profile in model_capabilities} >= {
+        "deepseek-chat",
+        "deepseek-v4-flash",
+    }
+    assert all(profile["transport"] == "chat_completions" for profile in model_capabilities)
 
     project = create_project(client, tmp_path)
     assert project["name"] == "Sample"

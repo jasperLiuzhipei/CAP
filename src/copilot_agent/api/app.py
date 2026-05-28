@@ -13,6 +13,7 @@ from copilot_agent.backend.models import Artifact, RunEvent
 from copilot_agent.backend.service import CopilotBackendService
 from copilot_agent.backend.store import SQLiteBackendStore
 from copilot_agent.model_config import resolve_model_config
+from copilot_agent.model_registry import list_model_profiles
 from copilot_agent.sandbox_backend import list_sandbox_backends
 from copilot_agent.worker import BackgroundRunWorker, RunWorker
 
@@ -21,6 +22,7 @@ from .schemas import (
     ApprovalResponse,
     ArtifactResponse,
     DiffResponse,
+    ModelCapabilityResponse,
     PolicyRuleResponse,
     ProjectCreate,
     ProjectResponse,
@@ -143,6 +145,15 @@ def _build_router():
         return [
             SandboxBackendResponse.from_domain(backend)
             for backend in list_sandbox_backends()
+        ]
+
+    @router.get("/models/capabilities", response_model=list[ModelCapabilityResponse])
+    def list_model_capabilities(
+        provider: str | None = Query(default=None),
+    ) -> list[ModelCapabilityResponse]:
+        return [
+            ModelCapabilityResponse.from_domain(profile)
+            for profile in list_model_profiles(provider)
         ]
 
     @router.get("/policy/rules", response_model=list[PolicyRuleResponse])
