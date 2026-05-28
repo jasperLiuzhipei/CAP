@@ -235,6 +235,9 @@ class CopilotBackendService:
             self.record_event(run_id, "run.needs_approval", {"status": "needs_approval"})
         return ToolReview(decision=decision, tool_call=tool_call, approval=approval)
 
+    def list_policy_rules(self) -> list[dict[str, Any]]:
+        return self.policy.describe_rules()
+
     def list_tool_calls(self, run_id: str) -> list[ToolCall]:
         self.get_run(run_id)
         return self.store.list_tool_calls(run_id)
@@ -261,6 +264,12 @@ class CopilotBackendService:
                 "decided_by": approval.decided_by,
             },
         )
+        for tool_call in self.store.list_tool_calls(approval.run_id):
+            if tool_call.approval_id == approval.id and tool_call.status == "needs_approval":
+                self.store.update_tool_call_status(
+                    tool_call.id,
+                    "completed" if approved else "failed",
+                )
         return approval
 
     def list_approvals(self, run_id: str) -> list[Approval]:
@@ -322,10 +331,12 @@ class CopilotBackendService:
         else:
             run = existing
         self._record_report_runtime_events(run.id, report)
+        report_tool_reviews = self._record_report_tool_calls(run.id, report)
 
         if report.saved_dir:
             self._record_report_artifacts(run.id, Path(report.saved_dir), report)
 
+        status = _status_after_policy_review(status, report_tool_reviews)
         run = self.store.update_run_status(
             run.id,
             status,
@@ -345,6 +356,33 @@ class CopilotBackendService:
             },
         )
         return run
+
+    def _record_report_tool_calls(
+        self,
+        run_id: str,
+        report: PhaseOneReport,
+    ) -> list[ToolReview]:
+        reviews: list[ToolReview] = []
+        for raw_tool_call in report.tool_calls:
+            tool_name, arguments = _normalize_report_tool_call(raw_tool_call)
+            review = self.record_tool_decision(
+                run_id=run_id,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+            reviews.append(review)
+            if review.decision.action == "deny":
+                self.record_event(
+                    run_id,
+                    "policy.violation",
+                    {
+                        "tool_call_id": review.tool_call.id,
+                        "tool_name": tool_name,
+                        "risk": review.decision.risk,
+                        "reason": review.decision.reason,
+                    },
+                )
+        return reviews
 
     def _record_report_runtime_events(self, run_id: str, report: PhaseOneReport) -> None:
         if report.sandbox_runtime is not None:
@@ -446,6 +484,39 @@ def _status_from_report(report: PhaseOneReport) -> RunStatus:
     if report.verification is not None:
         return "succeeded" if report.verification.exit_code == 0 else "failed"
     return "succeeded"
+
+
+def _status_after_policy_review(
+    status: RunStatus,
+    reviews: list[ToolReview],
+) -> RunStatus:
+    if any(review.decision.action == "deny" for review in reviews):
+        return "failed"
+    if status == "succeeded" and any(review.decision.requires_approval for review in reviews):
+        return "needs_approval"
+    return status
+
+
+def _normalize_report_tool_call(raw_tool_call: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    tool_name = str(raw_tool_call.get("tool_name") or raw_tool_call.get("name") or "unknown")
+    arguments = raw_tool_call.get("arguments", {})
+
+    if tool_name in {"apply_patch_call", "apply_patch"}:
+        tool_name = "apply_patch"
+        if isinstance(arguments, str):
+            arguments = {"patch": arguments}
+    elif tool_name in {"shell", "shell_call", "shell.exec", "exec_command"}:
+        tool_name = "shell.exec"
+        if isinstance(arguments, str):
+            arguments = {"cmd": arguments}
+    elif tool_name in {"git", "git_call", "git.exec"}:
+        tool_name = "git.exec"
+        if isinstance(arguments, str):
+            arguments = {"cmd": arguments}
+    elif not isinstance(arguments, dict):
+        arguments = {"value": arguments}
+
+    return tool_name, arguments
 
 
 def _event_type_for_status(status: RunStatus) -> RunEventType:

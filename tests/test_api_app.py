@@ -186,6 +186,16 @@ def test_api_tool_review_approval_and_listing(tmp_path: Path) -> None:
     assert "event: approval.required" in event_stream.text
 
 
+def test_api_exposes_policy_rules(tmp_path: Path) -> None:
+    client, _ = build_client(tmp_path)
+
+    response = client.get("/api/v1/policy/rules")
+
+    assert response.status_code == 200
+    scopes = {rule["scope"] for rule in response.json()}
+    assert {"apply_patch", "git.remote", "network", "destructive"}.issubset(scopes)
+
+
 def test_api_artifacts_and_diff_endpoint(tmp_path: Path) -> None:
     client, service = build_client(tmp_path)
     project = create_project(client, tmp_path)
