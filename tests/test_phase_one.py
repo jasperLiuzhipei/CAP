@@ -21,6 +21,7 @@ from copilot_agent.phase_one import (
     _command_uses_pytest,
     _dependency_help,
     _diff_snapshots,
+    _extract_model_usage,
     _extract_tool_calls,
     _format_sandbox_runtime_log,
     _python_executables_from_test_cmd,
@@ -434,6 +435,27 @@ def test_extract_tool_calls() -> None:
     assert calls[1] == {"name": "apply_patch", "arguments": "not-json"}
     assert calls[2] == {"name": "exec_call", "arguments": None}
     assert calls[3] == {"name": "function_call", "arguments": None}
+
+
+def test_extract_model_usage() -> None:
+    result = SimpleNamespace(
+        context_wrapper=SimpleNamespace(
+            usage=SimpleNamespace(
+                requests=2,
+                input_tokens=100,
+                output_tokens=25,
+                total_tokens=125,
+            )
+        )
+    )
+
+    assert _extract_model_usage(result) == {
+        "requests": 2,
+        "input_tokens": 100,
+        "output_tokens": 25,
+        "total_tokens": 125,
+    }
+    assert _extract_model_usage(SimpleNamespace(context_wrapper=None)) is None
 
 
 def test_report_serialization_and_save(tmp_path: Path) -> None:

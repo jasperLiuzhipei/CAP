@@ -29,8 +29,10 @@ from .schemas import (
     RunEventResponse,
     RunExecute,
     RunFinish,
+    RunMetricsResponse,
     RunResponse,
     RuntimeConfigResponse,
+    RunTraceResponse,
     SandboxBackendResponse,
     ToolCallResponse,
     ToolReviewCreate,
@@ -455,6 +457,36 @@ def _build_router():
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [RunEventResponse.from_domain(event) for event in events]
+
+    @router.get(
+        "/runs/{run_id}/metrics",
+        response_model=RunMetricsResponse,
+        responses={404: {"description": "Run not found"}},
+    )
+    def get_run_metrics(
+        run_id: str,
+        service: CopilotBackendService = SERVICE_DEPENDENCY,
+    ) -> RunMetricsResponse:
+        try:
+            metrics = service.get_run_metrics(run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RunMetricsResponse.from_domain(metrics)
+
+    @router.get(
+        "/runs/{run_id}/trace",
+        response_model=RunTraceResponse,
+        responses={404: {"description": "Run not found"}},
+    )
+    def get_run_trace(
+        run_id: str,
+        service: CopilotBackendService = SERVICE_DEPENDENCY,
+    ) -> RunTraceResponse:
+        try:
+            trace = service.get_run_trace(run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RunTraceResponse.from_domain(trace)
 
     @router.get(
         "/runs/{run_id}/events/stream",

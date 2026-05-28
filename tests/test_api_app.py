@@ -196,6 +196,38 @@ def test_api_exposes_policy_rules(tmp_path: Path) -> None:
     assert {"apply_patch", "git.remote", "network", "destructive"}.issubset(scopes)
 
 
+def test_api_exposes_run_metrics_and_trace(tmp_path: Path) -> None:
+    client, service = build_client(tmp_path)
+    project = create_project(client, tmp_path)
+    run = create_run(client, str(project["id"]))
+
+    service.start_run(str(run["id"]))
+    service.record_model_usage(
+        str(run["id"]),
+        requests=1,
+        input_tokens=2000,
+        output_tokens=1000,
+    )
+    review = service.record_tool_decision(
+        run_id=str(run["id"]),
+        tool_name="apply_patch",
+        arguments={"patch": "*** Begin Patch"},
+    )
+    service.decide_approval(review.approval.id, approved=False, decided_by="jasper")
+    service.finish_run(str(run["id"]), "failed", summary="tests failed")
+
+    metrics = client.get(f"/api/v1/runs/{run['id']}/metrics")
+    trace = client.get(f"/api/v1/runs/{run['id']}/trace")
+
+    assert metrics.status_code == 200
+    assert metrics.json()["status"] == "failed"
+    assert metrics.json()["token_usage"]["total_tokens"] == 3000
+    assert metrics.json()["approvals_rejected"] == 1
+    assert trace.status_code == 200
+    assert trace.json()["tool_calls"][0]["approval_decision"] == "rejected"
+    assert trace.json()["tool_calls"][0]["result_summary"] == "approval rejected by jasper"
+
+
 def test_api_artifacts_and_diff_endpoint(tmp_path: Path) -> None:
     client, service = build_client(tmp_path)
     project = create_project(client, tmp_path)

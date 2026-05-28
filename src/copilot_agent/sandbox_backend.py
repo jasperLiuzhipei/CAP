@@ -222,7 +222,7 @@ def _resolve_docker_sdk(sdk: dict[str, Any]) -> tuple[Any, Any, Any]:
         return docker_from_env, docker_client_cls, docker_options_cls
 
     try:
-        from agents.sandbox.sandboxes.docker import (  # type: ignore[import-untyped]
+        from agents.sandbox.sandboxes.docker import (  # type: ignore[import-untyped] # noqa: I001
             DockerSandboxClient,
             DockerSandboxClientOptions,
         )
