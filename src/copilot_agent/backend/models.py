@@ -24,6 +24,7 @@ RunEventType = Literal[
     "run.failed",
     "run.cancelled",
     "tool.reviewed",
+    "policy.violation",
     "approval.required",
     "approval.decided",
     "artifact.created",

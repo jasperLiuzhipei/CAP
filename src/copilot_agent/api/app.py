@@ -21,6 +21,7 @@ from .schemas import (
     ApprovalResponse,
     ArtifactResponse,
     DiffResponse,
+    PolicyRuleResponse,
     ProjectCreate,
     ProjectResponse,
     RunCreate,
@@ -141,6 +142,12 @@ def _build_router():
             SandboxBackendResponse.from_domain(backend)
             for backend in list_sandbox_backends()
         ]
+
+    @router.get("/policy/rules", response_model=list[PolicyRuleResponse])
+    def list_policy_rules(
+        service: CopilotBackendService = SERVICE_DEPENDENCY,
+    ) -> list[PolicyRuleResponse]:
+        return [PolicyRuleResponse(**rule) for rule in service.list_policy_rules()]
 
     @router.post(
         "/projects",

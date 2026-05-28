@@ -215,6 +215,14 @@ class ToolReviewCreate(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+class PolicyRuleResponse(BaseModel):
+    scope: str
+    action: str
+    risk: str
+    description: str
+    examples: list[str]
+
+
 class ToolCallResponse(BaseModel):
     id: str
     run_id: str
