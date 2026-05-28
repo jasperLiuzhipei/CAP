@@ -31,7 +31,8 @@ copilot_agent/
 │   ├── 21-phase-three-sandbox-backend-protocol.md
 │   ├── 22-phase-three-docker-sandbox-backend.md
 │   ├── 23-memory-v2-claude-code-inspired.md
-│   └── 24-phase-four-tool-policy-approvals.md
+│   ├── 24-phase-four-tool-policy-approvals.md
+│   └── 25-phase-four-observability-cost.md
 ├── examples/
 │   └── sample_repo/
 └── src/
@@ -64,6 +65,7 @@ copilot_agent/
 22. [Phase 3 Docker Sandbox Backend](22-phase-three-docker-sandbox-backend.md)
 23. [Memory v2: Claude Code Inspired Design](23-memory-v2-claude-code-inspired.md)
 24. [Phase 4A Tool Policy and Approvals](24-phase-four-tool-policy-approvals.md)
+25. [Phase 4B Observability and Cost](25-phase-four-observability-cost.md)
 
 ## 核心技术判断
 

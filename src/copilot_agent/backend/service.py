@@ -15,9 +15,22 @@ from .models import (
     Project,
     RunEvent,
     RunEventType,
+    RunMetrics,
     RunRecord,
     RunStatus,
+    RunTrace,
+    TokenUsage,
     ToolCall,
+    ToolTraceItem,
+)
+from .observability import (
+    duration_ms,
+    estimate_cost,
+    failed_reason_from_events,
+    finished_at_from_events,
+    latest_usage_event,
+    started_at_from_events,
+    usage_to_payload,
 )
 from .policy import ToolDecision, ToolPolicyEngine
 from .store import SQLiteBackendStore
@@ -208,6 +221,7 @@ class CopilotBackendService:
                 risk=decision.risk,
                 reason=decision.reason,
                 approval_id=approval.id if approval else None,
+                result_summary=_tool_result_summary(decision.action, decision.reason),
             )
         )
         self.record_event(
@@ -218,6 +232,7 @@ class CopilotBackendService:
                 "tool_name": tool_name,
                 "action": decision.action,
                 "risk": decision.risk,
+                "status": status,
                 "approval_id": approval.id if approval else None,
             },
         )
@@ -269,6 +284,9 @@ class CopilotBackendService:
                 self.store.update_tool_call_status(
                     tool_call.id,
                     "completed" if approved else "failed",
+                    result_summary=(
+                        f"approval {'approved' if approved else 'rejected'} by {decided_by}"
+                    ),
                 )
         return approval
 
@@ -283,6 +301,100 @@ class CopilotBackendService:
     def list_events(self, run_id: str) -> list[RunEvent]:
         self.get_run(run_id)
         return self.store.list_events(run_id)
+
+    def record_model_usage(
+        self,
+        run_id: str,
+        *,
+        requests: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+    ) -> RunEvent:
+        self.get_run(run_id)
+        usage = TokenUsage(
+            requests=requests,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+        return self.record_event(
+            run_id,
+            "model.usage",
+            {"usage": usage_to_payload(usage)},
+        )
+
+    def get_run_metrics(self, run_id: str) -> RunMetrics:
+        run = self.get_run(run_id)
+        events = self.store.list_events(run_id)
+        tool_calls = self.store.list_tool_calls(run_id)
+        approvals = self.store.list_approvals(run_id)
+        usage = latest_usage_event(events)
+        started_at = started_at_from_events(events)
+        finished_at = finished_at_from_events(events)
+        if finished_at is None and run.status in {"cancelled", "failed", "succeeded"}:
+            finished_at = run.updated_at
+        failed_reason = None
+        if run.status == "failed":
+            failed_reason = failed_reason_from_events(events, run.summary)
+        return RunMetrics(
+            run_id=run.id,
+            status=run.status,
+            model_provider=run.model_provider,
+            model=run.model,
+            tool_strategy=run.tool_strategy,
+            sandbox_backend=run.sandbox_backend,
+            created_at=run.created_at,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_ms=duration_ms(started_at, finished_at),
+            total_events=len(events),
+            total_tool_calls=len(tool_calls),
+            approvals_required=len(approvals),
+            approvals_pending=sum(1 for approval in approvals if approval.decision == "pending"),
+            approvals_approved=sum(1 for approval in approvals if approval.decision == "approved"),
+            approvals_rejected=sum(1 for approval in approvals if approval.decision == "rejected"),
+            failed_reason=failed_reason,
+            token_usage=usage,
+            cost_estimate=estimate_cost(
+                provider=run.model_provider,
+                model=run.model,
+                usage=usage,
+            ),
+        )
+
+    def get_run_trace(self, run_id: str) -> RunTrace:
+        self.get_run(run_id)
+        approvals_by_id = {
+            approval.id: approval for approval in self.store.list_approvals(run_id)
+        }
+        tool_trace = [
+            ToolTraceItem(
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.tool_name,
+                action=tool_call.action,
+                status=tool_call.status,
+                risk=tool_call.risk,
+                reason=tool_call.reason,
+                approval_id=tool_call.approval_id,
+                approval_decision=(
+                    approvals_by_id[tool_call.approval_id].decision
+                    if tool_call.approval_id in approvals_by_id
+                    else None
+                ),
+                result_summary=tool_call.result_summary,
+                duration_ms=tool_call.duration_ms,
+                arguments_redacted=tool_call.arguments_redacted,
+                created_at=tool_call.created_at,
+                updated_at=tool_call.updated_at,
+            )
+            for tool_call in self.store.list_tool_calls(run_id)
+        ]
+        return RunTrace(
+            run_id=run_id,
+            tool_calls=tool_trace,
+            events=self.store.list_events(run_id),
+        )
 
     def record_event(
         self,
@@ -331,6 +443,7 @@ class CopilotBackendService:
         else:
             run = existing
         self._record_report_runtime_events(run.id, report)
+        self._record_report_model_usage(run.id, report)
         report_tool_reviews = self._record_report_tool_calls(run.id, report)
 
         if report.saved_dir:
@@ -356,6 +469,18 @@ class CopilotBackendService:
             },
         )
         return run
+
+    def _record_report_model_usage(self, run_id: str, report: PhaseOneReport) -> None:
+        raw_usage = getattr(report, "model_usage", None)
+        if not isinstance(raw_usage, dict):
+            return
+        self.record_model_usage(
+            run_id,
+            requests=_optional_int(raw_usage.get("requests")),
+            input_tokens=_optional_int(raw_usage.get("input_tokens")),
+            output_tokens=_optional_int(raw_usage.get("output_tokens")),
+            total_tokens=_optional_int(raw_usage.get("total_tokens")),
+        )
 
     def _record_report_tool_calls(
         self,
@@ -517,6 +642,23 @@ def _normalize_report_tool_call(raw_tool_call: dict[str, Any]) -> tuple[str, dic
         arguments = {"value": arguments}
 
     return tool_name, arguments
+
+
+def _tool_result_summary(action: str, reason: str) -> str:
+    if action == "allow":
+        return f"allowed by policy: {reason}"
+    if action == "deny":
+        return f"denied by policy: {reason}"
+    return f"pending approval: {reason}"
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _event_type_for_status(status: RunStatus) -> RunEventType:

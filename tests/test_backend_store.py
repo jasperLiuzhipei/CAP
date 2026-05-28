@@ -50,6 +50,8 @@ def test_sqlite_store_round_trips_control_plane_records(tmp_path) -> None:
             risk="R1",
             reason="review",
             approval_id=approval.id,
+            result_summary="pending approval: review",
+            duration_ms=12.5,
         )
     )
     artifact = store.create_artifact(
@@ -86,7 +88,11 @@ def test_sqlite_store_round_trips_control_plane_records(tmp_path) -> None:
         diff_path=artifact.path,
     )
     decided = store.decide_approval(approval.id, "approved", decided_by="jasper")
-    completed_tool = store.update_tool_call_status(tool_call.id, "completed")
+    completed_tool = store.update_tool_call_status(
+        tool_call.id,
+        "completed",
+        result_summary="approved by jasper",
+    )
 
     assert store.get_project(project.id) == project
     assert store.list_projects() == [project]
@@ -98,6 +104,8 @@ def test_sqlite_store_round_trips_control_plane_records(tmp_path) -> None:
     assert decided.decided_at is not None
     assert store.list_approvals(run.id) == [decided]
     assert completed_tool.status == "completed"
+    assert completed_tool.result_summary == "approved by jasper"
+    assert completed_tool.duration_ms == 12.5
     assert store.list_tool_calls(run.id) == [completed_tool]
     assert store.list_artifacts(run.id) == [artifact]
     assert store.list_events(run.id) == [queued_event, completed_event]
@@ -113,3 +121,36 @@ def test_sqlite_store_missing_records_raise_clear_errors(tmp_path) -> None:
         store.decide_approval("missing", "rejected", decided_by="jasper")
     with pytest.raises(FileNotFoundError, match="Tool call not found"):
         store.update_tool_call_status("missing", "failed")
+
+
+def test_sqlite_store_migrates_tool_trace_columns(tmp_path) -> None:
+    db_path = tmp_path / "legacy.sqlite"
+    store = SQLiteBackendStore(db_path)
+    store.initialize()
+
+    with store._connect() as conn:
+        conn.execute("ALTER TABLE tool_calls RENAME TO tool_calls_old")
+        conn.execute(
+            """
+            CREATE TABLE tool_calls (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                tool_name TEXT NOT NULL,
+                arguments_redacted_json TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                risk TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                approval_id TEXT REFERENCES approvals(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("DROP TABLE tool_calls_old")
+
+    store.initialize()
+
+    with store._connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(tool_calls)")}
+    assert {"result_summary", "duration_ms"}.issubset(columns)

@@ -9,11 +9,16 @@ from copilot_agent.backend.models import (
     Approval,
     ApprovalDecision,
     Artifact,
+    CostEstimate,
     Project,
     RunEvent,
+    RunMetrics,
     RunRecord,
     RunStatus,
+    RunTrace,
+    TokenUsage,
     ToolCall,
+    ToolTraceItem,
 )
 from copilot_agent.backend.service import ToolReview
 from copilot_agent.sandbox_backend import (
@@ -233,6 +238,8 @@ class ToolCallResponse(BaseModel):
     risk: str
     reason: str
     approval_id: str | None
+    result_summary: str = ""
+    duration_ms: float | None = None
     created_at: str
     updated_at: str
 
@@ -307,6 +314,100 @@ class RunEventResponse(BaseModel):
     @classmethod
     def from_domain(cls, event: RunEvent) -> RunEventResponse:
         return cls(**event.__dict__)
+
+
+class TokenUsageResponse(BaseModel):
+    requests: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+
+    @classmethod
+    def from_domain(cls, usage: TokenUsage) -> TokenUsageResponse:
+        return cls(**usage.__dict__)
+
+
+class CostEstimateResponse(BaseModel):
+    input_cost_usd: float | None
+    output_cost_usd: float | None
+    total_cost_usd: float | None
+    pricing_source: str
+    estimated: bool
+
+    @classmethod
+    def from_domain(cls, cost: CostEstimate) -> CostEstimateResponse:
+        return cls(**cost.__dict__)
+
+
+class RunMetricsResponse(BaseModel):
+    run_id: str
+    status: str
+    model_provider: str
+    model: str
+    tool_strategy: str
+    sandbox_backend: str
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    duration_ms: float | None
+    total_events: int
+    total_tool_calls: int
+    approvals_required: int
+    approvals_pending: int
+    approvals_approved: int
+    approvals_rejected: int
+    failed_reason: str | None
+    token_usage: TokenUsageResponse
+    cost_estimate: CostEstimateResponse
+
+    @classmethod
+    def from_domain(cls, metrics: RunMetrics) -> RunMetricsResponse:
+        return cls(
+            **{
+                **metrics.__dict__,
+                "token_usage": TokenUsageResponse.from_domain(metrics.token_usage),
+                "cost_estimate": CostEstimateResponse.from_domain(
+                    metrics.cost_estimate
+                ),
+            }
+        )
+
+
+class ToolTraceItemResponse(BaseModel):
+    tool_call_id: str
+    tool_name: str
+    action: str
+    status: str
+    risk: str
+    reason: str
+    approval_id: str | None
+    approval_decision: str | None
+    result_summary: str
+    duration_ms: float | None
+    arguments_redacted: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+    @classmethod
+    def from_domain(cls, item: ToolTraceItem) -> ToolTraceItemResponse:
+        return cls(**item.__dict__)
+
+
+class RunTraceResponse(BaseModel):
+    run_id: str
+    tool_calls: list[ToolTraceItemResponse]
+    events: list[RunEventResponse]
+
+    @classmethod
+    def from_domain(cls, trace: RunTrace) -> RunTraceResponse:
+        return cls(
+            run_id=trace.run_id,
+            tool_calls=[
+                ToolTraceItemResponse.from_domain(tool_call)
+                for tool_call in trace.tool_calls
+            ],
+            events=[RunEventResponse.from_domain(event) for event in trace.events],
+        )
 
 
 class DiffResponse(BaseModel):

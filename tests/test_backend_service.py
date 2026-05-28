@@ -68,6 +68,84 @@ def test_backend_service_manages_project_run_and_tool_review(tmp_path: Path) -> 
     assert events[3].payload["approval_id"] == review.approval.id
 
 
+def test_backend_service_exposes_run_metrics_and_trace(tmp_path: Path) -> None:
+    service = build_service(tmp_path)
+    project = service.create_project(name="Sample", repo_path=tmp_path / "repo")
+    run = service.queue_run(
+        project_id=project.id,
+        task="Fix bug",
+        model_provider="openai",
+        model="gpt-4.1-mini",
+        tool_strategy="native",
+    )
+
+    service.start_run(run.id)
+    service.record_model_usage(
+        run.id,
+        requests=2,
+        input_tokens=1000,
+        output_tokens=500,
+    )
+    review = service.record_tool_decision(
+        run_id=run.id,
+        tool_name="apply_patch",
+        arguments={"patch": "*** Begin Patch"},
+    )
+    service.decide_approval(review.approval.id, approved=True, decided_by="jasper")
+    service.finish_run(run.id, "succeeded", summary="done")
+
+    metrics = service.get_run_metrics(run.id)
+    trace = service.get_run_trace(run.id)
+
+    assert metrics.started_at is not None
+    assert metrics.finished_at is not None
+    assert metrics.duration_ms is not None
+    assert metrics.total_tool_calls == 1
+    assert metrics.approvals_required == 1
+    assert metrics.approvals_approved == 1
+    assert metrics.token_usage.requests == 2
+    assert metrics.token_usage.input_tokens == 1000
+    assert metrics.token_usage.output_tokens == 500
+    assert metrics.token_usage.total_tokens == 1500
+    assert metrics.cost_estimate.pricing_source == "default_estimate"
+    assert metrics.cost_estimate.total_cost_usd == 0.0012
+    assert trace.tool_calls[0].approval_decision == "approved"
+    assert trace.tool_calls[0].result_summary == "approval approved by jasper"
+    assert [event.event_type for event in trace.events].count("model.usage") == 1
+
+
+def test_backend_service_metrics_capture_failed_reason_and_missing_pricing(
+    tmp_path: Path,
+) -> None:
+    service = build_service(tmp_path)
+    project = service.create_project(name="Sample", repo_path=tmp_path / "repo")
+    run = service.queue_run(
+        project_id=project.id,
+        task="Dangerous command",
+        model_provider="unknown",
+        model="custom-model",
+        tool_strategy="compat_functions",
+    )
+
+    service.start_run(run.id)
+    service.record_tool_decision(
+        run_id=run.id,
+        tool_name="shell.exec",
+        arguments={"cmd": "rm -rf /tmp/example"},
+    )
+    service.record_event(
+        run.id,
+        "policy.violation",
+        {"reason": "command matches denied pattern"},
+    )
+    service.finish_run(run.id, "failed", summary="unsafe command")
+
+    metrics = service.get_run_metrics(run.id)
+
+    assert metrics.failed_reason == "command matches denied pattern"
+    assert metrics.cost_estimate.pricing_source == "pricing_unavailable"
+
+
 def test_backend_service_rejects_invalid_project_or_run(tmp_path: Path) -> None:
     service = build_service(tmp_path)
 

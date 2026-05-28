@@ -27,6 +27,9 @@ RunEventType = Literal[
     "policy.violation",
     "approval.required",
     "approval.decided",
+    "model.usage",
+    "sandbox.runtime_checked",
+    "verification.completed",
     "artifact.created",
 ]
 
@@ -87,6 +90,8 @@ class ToolCall:
     risk: str
     reason: str
     approval_id: str | None = None
+    result_summary: str = ""
+    duration_ms: float | None = None
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 
@@ -108,3 +113,67 @@ class RunEvent:
     event_type: RunEventType
     payload: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(frozen=True)
+class TokenUsage:
+    requests: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class CostEstimate:
+    input_cost_usd: float | None = None
+    output_cost_usd: float | None = None
+    total_cost_usd: float | None = None
+    pricing_source: str = "unavailable"
+    estimated: bool = True
+
+
+@dataclass(frozen=True)
+class RunMetrics:
+    run_id: str
+    status: RunStatus
+    model_provider: str
+    model: str
+    tool_strategy: str
+    sandbox_backend: str
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    duration_ms: float | None
+    total_events: int
+    total_tool_calls: int
+    approvals_required: int
+    approvals_pending: int
+    approvals_approved: int
+    approvals_rejected: int
+    failed_reason: str | None
+    token_usage: TokenUsage
+    cost_estimate: CostEstimate
+
+
+@dataclass(frozen=True)
+class ToolTraceItem:
+    tool_call_id: str
+    tool_name: str
+    action: ToolAction
+    status: ToolCallStatus
+    risk: str
+    reason: str
+    approval_id: str | None
+    approval_decision: ApprovalDecision | None
+    result_summary: str
+    duration_ms: float | None
+    arguments_redacted: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class RunTrace:
+    run_id: str
+    tool_calls: list[ToolTraceItem]
+    events: list[RunEvent]

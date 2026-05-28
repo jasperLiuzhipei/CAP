@@ -74,6 +74,8 @@ SCHEMA: tuple[str, ...] = (
         risk TEXT NOT NULL,
         reason TEXT NOT NULL,
         approval_id TEXT REFERENCES approvals(id) ON DELETE SET NULL,
+        result_summary TEXT NOT NULL DEFAULT '',
+        duration_ms REAL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )
@@ -113,6 +115,13 @@ class SQLiteBackendStore:
         with self._connect() as conn:
             for statement in SCHEMA:
                 conn.execute(statement)
+            _ensure_column(
+                conn,
+                "tool_calls",
+                "result_summary",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            _ensure_column(conn, "tool_calls", "duration_ms", "REAL")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -315,9 +324,10 @@ class SQLiteBackendStore:
                 """
                 INSERT INTO tool_calls (
                     id, run_id, tool_name, arguments_redacted_json, action, status,
-                    risk, reason, approval_id, created_at, updated_at
+                    risk, reason, approval_id, result_summary, duration_ms,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tool_call.id,
@@ -329,6 +339,8 @@ class SQLiteBackendStore:
                     tool_call.risk,
                     tool_call.reason,
                     tool_call.approval_id,
+                    tool_call.result_summary,
+                    tool_call.duration_ms,
                     tool_call.created_at,
                     tool_call.updated_at,
                 ),
@@ -347,6 +359,9 @@ class SQLiteBackendStore:
         self,
         tool_call_id: str,
         status: ToolCallStatus,
+        *,
+        result_summary: str | None = None,
+        duration_ms: float | None = None,
     ) -> ToolCall:
         with self._connect() as conn:
             row = conn.execute(
@@ -356,11 +371,30 @@ class SQLiteBackendStore:
         if row is None:
             raise FileNotFoundError(f"Tool call not found: {tool_call_id}")
 
-        updated = replace(_row_to_tool_call(row), status=status, updated_at=utc_now_iso())
+        existing = _row_to_tool_call(row)
+        updated = replace(
+            existing,
+            status=status,
+            result_summary=(
+                existing.result_summary if result_summary is None else result_summary
+            ),
+            duration_ms=existing.duration_ms if duration_ms is None else duration_ms,
+            updated_at=utc_now_iso(),
+        )
         with self._connect() as conn:
             conn.execute(
-                "UPDATE tool_calls SET status = ?, updated_at = ? WHERE id = ?",
-                (updated.status, updated.updated_at, updated.id),
+                """
+                UPDATE tool_calls
+                SET status = ?, result_summary = ?, duration_ms = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    updated.status,
+                    updated.result_summary,
+                    updated.duration_ms,
+                    updated.updated_at,
+                    updated.id,
+                ),
             )
         return updated
 
@@ -418,6 +452,17 @@ class SQLiteBackendStore:
 
 def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _json_loads(payload: str) -> dict[str, Any]:
@@ -482,6 +527,8 @@ def _row_to_tool_call(row: sqlite3.Row) -> ToolCall:
         risk=row["risk"],
         reason=row["reason"],
         approval_id=row["approval_id"],
+        result_summary=row["result_summary"] if "result_summary" in row.keys() else "",
+        duration_ms=row["duration_ms"] if "duration_ms" in row.keys() else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
